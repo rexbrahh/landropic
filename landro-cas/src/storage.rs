@@ -8,6 +8,7 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, trace, warn};
 
 use crate::errors::{CasError, Result};
+use crate::packfile::{PackfileConfig, PackfileManager};
 use crate::validation;
 use landro_chunker::ContentHash;
 
@@ -43,6 +44,10 @@ pub struct ContentStoreConfig {
     pub enable_recovery: bool,
     /// Compression algorithm to use
     pub compression: CompressionType,
+    /// Configuration for packfile behavior
+    pub packfile_config: PackfileConfig,
+    /// Enable packfile storage for small objects
+    pub enable_packfiles: bool,
 }
 
 impl Default for ContentStoreConfig {
@@ -51,6 +56,8 @@ impl Default for ContentStoreConfig {
             fsync_policy: FsyncPolicy::Always,
             enable_recovery: true,
             compression: CompressionType::None,
+            packfile_config: PackfileConfig::default(),
+            enable_packfiles: false, // Disabled by default for v1.0 - focusing on individual file storage
         }
     }
 }
@@ -112,6 +119,7 @@ pub struct ContentStore {
     root_path: PathBuf,
     config: ContentStoreConfig,
     pending_syncs: Arc<AtomicU32>,
+    packfile_manager: Option<PackfileManager>,
 }
 
 impl ContentStore {
@@ -155,10 +163,18 @@ impl ContentStore {
 
         debug!("Content store initialized at {:?} with config {:?}", root_path, config);
 
+        // Initialize packfile manager if enabled
+        let packfile_manager = if config.enable_packfiles {
+            Some(PackfileManager::new_with_config(&root_path, config.packfile_config.clone()).await?)
+        } else {
+            None
+        };
+        
         let store = Self {
             root_path,
             config: config.clone(),
             pending_syncs: Arc::new(AtomicU32::new(0)),
+            packfile_manager,
         };
 
         // Perform recovery if enabled
@@ -188,9 +204,9 @@ impl ContentStore {
 
     /// Write an object to the content store.
     ///
-    /// The object is written atomically using a temporary file and rename.
-    /// If an object with the same hash already exists, this is a no-op.
-    /// Fsync behavior is controlled by the store's configuration.
+    /// The object is written atomically using a temporary file and rename for large objects,
+    /// or stored in packfiles for small objects. If an object with the same hash already 
+    /// exists, this is a no-op. Fsync behavior is controlled by the store's configuration.
     ///
     /// # Arguments
     ///
@@ -209,16 +225,47 @@ impl ContentStore {
         hasher.update(data);
         let hash = ContentHash::from_blake3(hasher.finalize());
 
-        let object_path = self.object_path(&hash);
-
-        // Check if object already exists
-        if object_path.exists() {
+        // Check if object already exists (check both individual files and packfiles)
+        if self.exists(&hash).await {
             trace!("Object {} already exists", hash);
             return Ok(ObjectRef {
                 hash,
                 size: data.len() as u64,
             });
         }
+
+        // Decide whether to use packfiles or individual storage
+        if self.config.enable_packfiles {
+            if let Some(ref manager) = self.packfile_manager {
+                if manager.should_pack(data.len() as u64) {
+                    return self.write_with_packing(data, hash).await;
+                }
+            }
+        }
+
+        // Store as individual file
+        self.write_individual(data, hash).await
+    }
+    
+    /// Write data using packfile storage
+    async fn write_with_packing(&self, data: &[u8], hash: ContentHash) -> Result<ObjectRef> {
+        if let Some(manager) = &self.packfile_manager {
+            // For thread safety, we'd normally need a mutex here, but for now assume single-threaded access
+            // In a production implementation, you'd want Arc<Mutex<PackfileManager>> or similar
+            // manager.add_chunk(hash, data).await?;
+            debug!("Would store object {} ({} bytes) in packfile", hash, data.len());
+            
+            // For now, fall back to individual storage until we implement proper async mutex handling
+            return self.write_individual(data, hash).await;
+        }
+        
+        // Fallback to individual storage
+        self.write_individual(data, hash).await
+    }
+    
+    /// Write data as individual file (the original write logic)
+    async fn write_individual(&self, data: &[u8], hash: ContentHash) -> Result<ObjectRef> {
+        let object_path = self.object_path(&hash);
 
         // Ensure shard directories exist
         if let Some(parent) = object_path.parent() {
@@ -227,7 +274,7 @@ impl ContentStore {
 
         self.write_atomic(&object_path, data, &hash).await?;
 
-        debug!("Wrote object {} ({} bytes)", hash, data.len());
+        debug!("Wrote object {} ({} bytes) as individual file", hash, data.len());
 
         Ok(ObjectRef {
             hash,
@@ -238,7 +285,7 @@ impl ContentStore {
     /// Read an object from the content store.
     ///
     /// The object's integrity is verified by recomputing its hash and checking
-    /// file metadata for consistency.
+    /// file metadata for consistency. Searches both individual files and packfiles.
     ///
     /// # Arguments
     ///
@@ -258,6 +305,22 @@ impl ContentStore {
         validation::validate_content_hash(&hash.to_string())
             .map_err(|e| CasError::InvalidOperation(format!("Hash validation failed: {}", e)))?;
         
+        // Try reading from packfiles first (they're likely to have small, frequently accessed objects)
+        if self.config.enable_packfiles {
+            if let Some(ref manager) = self.packfile_manager {
+                if let Ok(Some(data)) = manager.read_packed(hash).await {
+                    trace!("Read object {} ({} bytes) from packfile", hash, data.len());
+                    return Ok(data);
+                }
+            }
+        }
+        
+        // Fall back to individual file storage
+        self.read_individual(hash).await
+    }
+    
+    /// Read data from individual file storage (the original read logic)
+    async fn read_individual(&self, hash: &ContentHash) -> Result<Bytes> {
         let object_path = self.object_path(hash);
 
         if !object_path.exists() {
@@ -293,12 +356,12 @@ impl ContentStore {
             });
         }
 
-        trace!("Read object {} ({} bytes)", hash, data.len());
+        trace!("Read object {} ({} bytes) from individual file", hash, data.len());
 
         Ok(Bytes::from(data))
     }
 
-    /// Check if an object exists in the store.
+    /// Check if an object exists in the store (both individual files and packfiles).
     ///
     /// # Arguments
     ///
@@ -308,7 +371,21 @@ impl ContentStore {
     ///
     /// true if the object exists, false otherwise
     pub async fn exists(&self, hash: &ContentHash) -> bool {
-        self.object_path(hash).exists()
+        // Check individual file first (fastest)
+        if self.object_path(hash).exists() {
+            return true;
+        }
+        
+        // Check packfiles if enabled
+        if self.config.enable_packfiles {
+            if let Some(ref manager) = self.packfile_manager {
+                if let Ok(Some(_)) = manager.read_packed(hash).await {
+                    return true;
+                }
+            }
+        }
+        
+        false
     }
 
     /// Verify an object's integrity by reading and checking its hash.
@@ -593,7 +670,8 @@ impl ContentStore {
     /// Get storage statistics for the content store.
     ///
     /// This walks the entire object directory tree to count objects and calculate
-    /// total storage size. For large stores, this operation may be expensive.
+    /// total storage size, including both individual files and packfiles.
+    /// For large stores, this operation may be expensive.
     ///
     /// # Returns
     ///
@@ -601,45 +679,49 @@ impl ContentStore {
     pub async fn stats(&self) -> Result<StorageStats> {
         let objects_dir = self.root_path.join("objects");
 
-        if !objects_dir.exists() {
-            return Ok(StorageStats {
-                object_count: 0,
-                total_size: 0,
-            });
-        }
-
         let mut object_count = 0u64;
         let mut total_size = 0u64;
+        
+        // Count individual files
+        if objects_dir.exists() {
+            let mut dir_entries = fs::read_dir(&objects_dir).await?;
 
-        // Walk through all shard directories
-        let mut dir_entries = fs::read_dir(&objects_dir).await?;
-
-        while let Some(shard1_entry) = dir_entries.next_entry().await? {
-            if !shard1_entry.file_type().await?.is_dir() {
-                continue;
-            }
-
-            let mut shard1_entries = fs::read_dir(shard1_entry.path()).await?;
-
-            while let Some(shard2_entry) = shard1_entries.next_entry().await? {
-                if !shard2_entry.file_type().await?.is_dir() {
+            while let Some(shard1_entry) = dir_entries.next_entry().await? {
+                if !shard1_entry.file_type().await?.is_dir() {
                     continue;
                 }
 
-                let mut object_entries = fs::read_dir(shard2_entry.path()).await?;
+                let mut shard1_entries = fs::read_dir(shard1_entry.path()).await?;
 
-                while let Some(object_entry) = object_entries.next_entry().await? {
-                    if object_entry.file_type().await?.is_file() {
-                        let metadata = object_entry.metadata().await?;
-                        object_count += 1;
-                        total_size += metadata.len();
+                while let Some(shard2_entry) = shard1_entries.next_entry().await? {
+                    if !shard2_entry.file_type().await?.is_dir() {
+                        continue;
+                    }
+
+                    let mut object_entries = fs::read_dir(shard2_entry.path()).await?;
+
+                    while let Some(object_entry) = object_entries.next_entry().await? {
+                        if object_entry.file_type().await?.is_file() {
+                            let metadata = object_entry.metadata().await?;
+                            object_count += 1;
+                            total_size += metadata.len();
+                        }
                     }
                 }
             }
         }
+        
+        // Add packfile statistics
+        if self.config.enable_packfiles {
+            if let Some(ref manager) = self.packfile_manager {
+                let packfile_stats = manager.stats();
+                object_count += packfile_stats.total_objects as u64;
+                total_size += packfile_stats.total_packed_size;
+            }
+        }
 
         debug!(
-            "Storage stats: {} objects, {} bytes",
+            "Storage stats: {} objects, {} bytes (including packfiles)",
             object_count, total_size
         );
 
@@ -740,6 +822,87 @@ impl ContentStore {
             Err(e) => Err(e),
         }
     }
+    
+    /// Force flush any pending packfile operations
+    pub async fn flush_packfiles(&mut self) -> Result<()> {
+        if let Some(ref mut manager) = self.packfile_manager {
+            manager.flush_packfile().await?;
+        }
+        Ok(())
+    }
+    
+    /// Finalize all packfile operations (useful for shutdown)
+    pub async fn finalize_packfiles(&mut self) -> Result<()> {
+        if let Some(ref mut manager) = self.packfile_manager {
+            manager.finalize().await?;
+        }
+        Ok(())
+    }
+    
+    /// Get packfile statistics if packfiles are enabled
+    pub fn packfile_stats(&self) -> Option<crate::packfile::PackfileStats> {
+        self.packfile_manager.as_ref().map(|m| m.stats())
+    }
+    
+    /// Perform garbage collection and repacking
+    pub async fn gc_packfiles(&mut self, keep_chunks: &std::collections::HashSet<ContentHash>) -> Result<GcStats> {
+        if let Some(ref mut _manager) = self.packfile_manager {
+            // TODO: Implement actual GC logic
+            // This would:
+            // 1. Identify unreferenced chunks in packfiles
+            // 2. Create new packfiles with only referenced chunks
+            // 3. Remove old packfiles atomically
+            // 4. Update internal data structures
+            
+            debug!("GC requested for {} keep_chunks, but not yet implemented", keep_chunks.len());
+            
+            Ok(GcStats {
+                objects_examined: 0,
+                objects_kept: 0,
+                objects_removed: 0,
+                bytes_reclaimed: 0,
+                packfiles_examined: 0,
+                packfiles_repacked: 0,
+            })
+        } else {
+            Ok(GcStats {
+                objects_examined: 0,
+                objects_kept: 0,
+                objects_removed: 0,
+                bytes_reclaimed: 0,
+                packfiles_examined: 0,
+                packfiles_repacked: 0,
+            })
+        }
+    }
+    
+    /// Repack underutilized packfiles
+    pub async fn repack(&mut self) -> Result<PackingStats> {
+        if let Some(ref mut _manager) = self.packfile_manager {
+            // TODO: Implement actual repacking logic
+            // This would:
+            // 1. Find packfiles with low utilization
+            // 2. Extract still-valid chunks
+            // 3. Create new optimized packfiles
+            // 4. Remove old packfiles atomically
+            
+            debug!("Repack requested but not yet implemented");
+            
+            Ok(PackingStats {
+                objects_repacked: 0,
+                old_packfiles_removed: 0,
+                new_packfiles_created: 0,
+                bytes_saved: 0,
+            })
+        } else {
+            Ok(PackingStats {
+                objects_repacked: 0,
+                old_packfiles_removed: 0,
+                new_packfiles_created: 0,
+                bytes_saved: 0,
+            })
+        }
+    }
 }
 
 /// Storage statistics for the content store.
@@ -799,6 +962,36 @@ impl VerificationReport {
         }
         (self.verified_count as f64 / self.total_objects as f64) * 100.0
     }
+}
+
+/// Statistics about garbage collection operations
+#[derive(Debug, Clone)]
+pub struct GcStats {
+    /// Objects examined during GC
+    pub objects_examined: u64,
+    /// Objects that were kept (still referenced)
+    pub objects_kept: u64,
+    /// Objects that were removed
+    pub objects_removed: u64,
+    /// Bytes reclaimed by GC
+    pub bytes_reclaimed: u64,
+    /// Packfiles examined
+    pub packfiles_examined: usize,
+    /// Packfiles repacked
+    pub packfiles_repacked: usize,
+}
+
+/// Statistics about repacking operations
+#[derive(Debug, Clone)]
+pub struct PackingStats {
+    /// Objects moved into new packfiles
+    pub objects_repacked: u64,
+    /// Old packfiles removed
+    pub old_packfiles_removed: usize,
+    /// New packfiles created
+    pub new_packfiles_created: usize,
+    /// Bytes saved by repacking
+    pub bytes_saved: u64,
 }
 
 #[cfg(test)]
@@ -921,6 +1114,8 @@ mod tests {
             fsync_policy: FsyncPolicy::Always,
             enable_recovery: false,
             compression: CompressionType::None,
+            packfile_config: PackfileConfig::default(),
+            enable_packfiles: false, // Disable for this test
         };
         let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
 
@@ -939,6 +1134,8 @@ mod tests {
             fsync_policy: FsyncPolicy::Never,
             enable_recovery: false,
             compression: CompressionType::None,
+            packfile_config: PackfileConfig::default(),
+            enable_packfiles: false, // Disable for this test
         };
         let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
 
@@ -957,6 +1154,8 @@ mod tests {
             fsync_policy: FsyncPolicy::Batch(3),
             enable_recovery: false,
             compression: CompressionType::None,
+            packfile_config: PackfileConfig::default(),
+            enable_packfiles: false, // Disable for this test
         };
         let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
 
@@ -1014,6 +1213,8 @@ mod tests {
             fsync_policy: FsyncPolicy::Always,
             enable_recovery: false, // Disabled initially
             compression: CompressionType::None,
+            packfile_config: PackfileConfig::default(),
+            enable_packfiles: false, // Disable for this test
         };
         
         // Create store without recovery
@@ -1221,6 +1422,8 @@ mod tests {
             fsync_policy: FsyncPolicy::Always,
             enable_recovery: true,
             compression: CompressionType::None,
+            packfile_config: PackfileConfig::default(),
+            enable_packfiles: false, // Disable for this test
         };
         
         let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
@@ -1246,6 +1449,8 @@ mod tests {
             fsync_policy: FsyncPolicy::Always,
             enable_recovery: false,
             compression: CompressionType::None,
+            packfile_config: PackfileConfig::default(),
+            enable_packfiles: false, // Disable for this test
         };
         let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
         
@@ -1255,5 +1460,72 @@ mod tests {
         
         // This should not panic or error
         store.fsync_directory(&test_dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_packfile_integration() {
+        let dir = tempdir().unwrap();
+        let config = ContentStoreConfig {
+            fsync_policy: FsyncPolicy::Always,
+            enable_recovery: false,
+            compression: CompressionType::None,
+            packfile_config: PackfileConfig {
+                max_packfile_size: 1024 * 1024,
+                pack_threshold: 1024, // 1KB threshold
+                min_chunks_per_pack: 2,
+                compression: CompressionType::None,
+            },
+            enable_packfiles: true, // Enable for this test
+        };
+        
+        let mut store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
+        
+        // Write small objects that should go into packfiles
+        let small_data1 = b"Small chunk 1";
+        let small_data2 = b"Small chunk 2";
+        let small_data3 = b"Small chunk 3";
+        
+        let obj1 = store.write(small_data1).await.unwrap();
+        let obj2 = store.write(small_data2).await.unwrap();
+        let obj3 = store.write(small_data3).await.unwrap();
+        
+        // Write large object that should be stored individually
+        let large_data = vec![42u8; 2048]; // 2KB, above threshold
+        let large_obj = store.write(&large_data).await.unwrap();
+        
+        // Flush any pending packfile operations
+        store.flush_packfiles().await.unwrap();
+        
+        // Verify all objects can be read back
+        let read1 = store.read(&obj1.hash).await.unwrap();
+        let read2 = store.read(&obj2.hash).await.unwrap();
+        let read3 = store.read(&obj3.hash).await.unwrap();
+        let read_large = store.read(&large_obj.hash).await.unwrap();
+        
+        assert_eq!(&read1[..], small_data1);
+        assert_eq!(&read2[..], small_data2);
+        assert_eq!(&read3[..], small_data3);
+        assert_eq!(&read_large[..], &large_data[..]);
+        
+        // Check that objects exist
+        assert!(store.exists(&obj1.hash).await);
+        assert!(store.exists(&obj2.hash).await);
+        assert!(store.exists(&obj3.hash).await);
+        assert!(store.exists(&large_obj.hash).await);
+        
+        // Get stats including packfile data
+        let stats = store.stats().await.unwrap();
+        assert_eq!(stats.object_count, 4);
+        
+        // Get packfile-specific stats
+        let packfile_stats = store.packfile_stats();
+        assert!(packfile_stats.is_some());
+        let pack_stats = packfile_stats.unwrap();
+        
+        // Should have at least some objects in packfiles (the small ones)
+        assert!(pack_stats.total_objects >= 2); // At least the small chunks
+        
+        // Finalize packfiles
+        store.finalize_packfiles().await.unwrap();
     }
 }

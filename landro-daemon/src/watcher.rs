@@ -45,7 +45,7 @@ impl FileWatcher {
     }
 
     /// Start watching with a callback
-    pub fn start<F>(&self, mut callback: F) -> Result<(), Box<dyn std::error::Error>>
+    pub fn start<F>(&self, callback: F) -> Result<(), Box<dyn std::error::Error>>
     where
         F: Fn(Vec<FileEvent>) + Send + 'static,
     {
@@ -148,29 +148,29 @@ fn convert_notify_event(event: Event) -> Option<Vec<FileEvent>> {
     let mut file_events = Vec::new();
 
     // Filter out temporary files and hidden files
-    let should_ignore = |path: &Path| {
-        let name = path.file_name()?.to_str()?;
-        
-        // Ignore hidden files
-        if name.starts_with('.') {
-            return true;
+    let should_ignore = |path: &Path| -> bool {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            // Ignore hidden files
+            if name.starts_with('.') {
+                return true;
+            }
+            
+            // Ignore temporary files
+            if name.ends_with('~') || name.ends_with(".tmp") || name.ends_with(".swp") {
+                return true;
+            }
+            
+            // Ignore common editor temp files
+            if name.starts_with("#") && name.ends_with("#") {
+                return true;
+            }
         }
         
-        // Ignore temporary files
-        if name.ends_with('~') || name.ends_with(".tmp") || name.ends_with(".swp") {
-            return true;
-        }
-        
-        // Ignore common editor temp files
-        if name.starts_with("#") && name.ends_with("#") {
-            return true;
-        }
-        
-        Some(false)
+        false
     };
 
     for path in &event.paths {
-        if should_ignore(path).unwrap_or(false) {
+        if should_ignore(path) {
             continue;
         }
 

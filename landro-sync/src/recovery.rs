@@ -233,17 +233,12 @@ impl RecoveryManager {
             // Save final state
             self.save_operation(&operation).await?;
             
-            // Remove from recovery log after delay (for debugging)
-            tokio::spawn({
-                let recovery_manager = self.clone();
-                let op_id = operation_id.to_string();
-                async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(300)).await; // 5 minutes
-                    if let Err(e) = recovery_manager.remove_operation(&op_id).await {
-                        warn!("Failed to remove completed operation from log: {}", e);
-                    }
-                }
-            });
+            // Remove from recovery log immediately
+            // In a production system, you might want to keep completed operations
+            // for a while for debugging purposes, but for now we'll clean up immediately
+            if let Err(e) = self.remove_operation(operation_id).await {
+                warn!("Failed to remove completed operation from log: {}", e);
+            }
         }
         
         Ok(())

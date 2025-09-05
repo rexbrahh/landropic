@@ -28,6 +28,15 @@ pub struct Connection {
     remote_device_name: Arc<Mutex<Option<String>>>,
 }
 
+impl std::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connection")
+            .field("remote_address", &self.inner.remote_address())
+            .field("stable_id", &self.inner.stable_id())
+            .finish()
+    }
+}
+
 impl Connection {
     /// Create a new connection wrapper
     pub fn new(inner: QuinnConnection) -> Self {

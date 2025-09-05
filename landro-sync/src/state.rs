@@ -204,7 +204,7 @@ impl SyncDatabase {
     /// Update or insert peer sync state
     pub fn upsert_peer_state(&mut self, state: &PeerSyncState) -> Result<()> {
         let state_json = serde_json::to_string(&state.current_state)
-            .map_err(|e| SyncError::Serialization(e.to_string()))?;
+            .map_err(|e| SyncError::Serialization(e))?;
 
         self.conn.execute(
             r#"

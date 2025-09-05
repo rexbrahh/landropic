@@ -5,11 +5,11 @@ use tokio::sync::{RwLock, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{info, warn, error, debug};
 
-use landro_quic::Server as QuicServer;
+use landro_quic::server::Server as QuicServer;
 use landro_sync::{SyncOrchestrator, SyncConfig};
 use landro_index::async_indexer::AsyncIndexer;
 use crate::discovery::DiscoveryService;
-use crate::watcher::FileWatcher;
+use crate::watcher::{FileWatcher, FileEventKind};
 
 /// Configuration for the daemon
 #[derive(Debug, Clone)]
@@ -83,11 +83,13 @@ impl Daemon {
         
         // Create storage directories
         tokio::fs::create_dir_all(&self.config.storage_path).await?;
-        let cas_path = self.config.storage_path.join("objects");
+        let _cas_path = self.config.storage_path.join("objects");
         let db_path = self.config.storage_path.join("index.sqlite");
         
         // Initialize database and indexer
-        let indexer = AsyncIndexer::new(db_path).await?;
+        let cas_path = self.config.storage_path.join("objects");
+        let indexer_config = landro_index::IndexerConfig::default();
+        let indexer = AsyncIndexer::new(&cas_path, &db_path, indexer_config).await?;
         let indexer = Arc::new(indexer);
         
         // Initialize sync orchestrator
@@ -131,9 +133,9 @@ impl Daemon {
         let identity = landro_crypto::DeviceIdentity::load(None).await?;
         
         // Create server
-        let mut server = QuicServer::new(
+        let server: QuicServer = QuicServer::new(
             self.config.bind_addr,
-            identity.signing_key().to_bytes().to_vec(),
+            identity.device_id().0.to_vec(),
             &self.config.device_name,
         ).await?;
         
@@ -239,6 +241,7 @@ impl Daemon {
     /// Add a folder to watch and sync
     pub async fn add_sync_folder(&self, path: impl AsRef<Path>) -> Result<(), Box<dyn std::error::Error>> {
         let path = path.as_ref().to_path_buf();
+        let path_for_indexing = path.clone();
         
         if !path.exists() {
             return Err(format!("Path does not exist: {}", path.display()).into());
@@ -257,24 +260,42 @@ impl Daemon {
         
         // Start watching
         let indexer = state.indexer.clone().unwrap();
-        let sync_orch = state.sync_orchestrator.clone().unwrap();
+        let _sync_orch = state.sync_orchestrator.clone().unwrap();
         
+        // For now, create a simple callback that doesn't use the sync orchestrator
+        // to avoid the Send + Sync issues with rusqlite::Connection
         watcher.start(move |events| {
             let indexer = indexer.clone();
-            let sync_orch = sync_orch.clone();
-            let path = path.clone();
+            let _path = path.clone();
             
             tokio::spawn(async move {
                 for event in events {
                     debug!("File event: {:?}", event);
                     
-                    // Update index
-                    if let Err(e) = indexer.index_directory(&path).await {
-                        error!("Failed to update index: {}", e);
+                    // Update index for the affected file/directory
+                    match &event.kind {
+                        FileEventKind::Created | FileEventKind::Modified => {
+                            if let Err(e) = indexer.index_folder(&event.path).await {
+                                error!("Failed to index path {}: {}", event.path.display(), e);
+                            }
+                        }
+                        FileEventKind::Deleted => {
+                            // For now, just log deleted files - proper deletion would require
+                            // more complex manifest management
+                            debug!("File deleted: {}", event.path.display());
+                        }
+                        FileEventKind::Renamed { from, to } => {
+                            debug!("File renamed: {} -> {}", from.display(), to.display());
+                            if let Err(e) = indexer.index_folder(to).await {
+                                error!("Failed to index renamed file {}: {}", to.display(), e);
+                            }
+                        }
                     }
                     
                     // Trigger sync if auto-sync is enabled
-                    // The sync orchestrator will handle the actual syncing
+                    // For now, we'll just log this - full sync triggering would need
+                    // peer discovery and connection management
+                    debug!("Auto-sync would be triggered for path: {}", event.path.display());
                 }
             });
         })?;
@@ -282,7 +303,7 @@ impl Daemon {
         state.file_watchers.push(watcher);
         
         // Index the folder immediately
-        state.indexer.as_ref().unwrap().index_directory(&path).await?;
+        state.indexer.as_ref().unwrap().index_folder(&path_for_indexing).await?;
         
         Ok(())
     }
@@ -387,11 +408,17 @@ pub struct DaemonStatus {
 
 /// Handle an incoming QUIC connection
 async fn handle_connection(
-    mut connection: landro_quic::Connection,
+    connection: landro_quic::Connection,
     sync_orchestrator: Arc<SyncOrchestrator>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Receive handshake
-    connection.receive_hello().await?;
+    // Load device identity for handshake
+    let identity = landro_crypto::DeviceIdentity::load(None).await?;
+    
+    // Perform server-side handshake
+    connection.server_handshake(
+        &identity.device_id().0,
+        &whoami::devicename(),
+    ).await?;
     
     // Get remote device info
     let device_id = connection.remote_device_id().await
@@ -402,32 +429,101 @@ async fn handle_connection(
     info!("Connection from {} ({})", device_name, hex::encode(&device_id[..8]));
     
     // Start sync with this peer
+    let peer_id_str = hex::encode(&device_id);
     sync_orchestrator.start_sync(
-        hex::encode(&device_id),
-        device_name,
+        peer_id_str.clone(),
+        device_name.clone(),
     ).await?;
     
-    // Handle sync protocol
+    // Handle sync protocol streams
     loop {
         match connection.accept_bi().await {
-            Ok((mut send, mut recv)) => {
-                // Handle bidirectional stream for sync protocol
-                // This would involve manifest exchange, chunk transfer, etc.
-                debug!("Accepted bidirectional stream");
+            Ok((send, recv)) => {
+                debug!("Accepted bidirectional stream for sync protocol");
                 
-                // TODO: Implement full sync protocol handling
-                // For now, just echo back
-                let mut buf = vec![0u8; 1024];
-                if let Ok(n) = recv.read(&mut buf).await {
-                    if n > 0 {
-                        send.write_all(&buf[..n]).await?;
+                // Handle the sync protocol stream
+                let sync_orch = sync_orchestrator.clone();
+                let peer_id = peer_id_str.clone();
+                
+                tokio::spawn(async move {
+                    if let Err(e) = handle_sync_stream(
+                        send,
+                        recv,
+                        peer_id,
+                        sync_orch,
+                    ).await {
+                        error!("Sync stream handling error: {}", e);
                     }
-                }
+                });
             }
             Err(e) => {
                 debug!("Connection closed: {}", e);
                 break;
             }
+        }
+    }
+    
+    // Complete sync when connection closes
+    if let Err(e) = sync_orchestrator.complete_sync(&peer_id_str).await {
+        warn!("Failed to complete sync with peer {}: {}", peer_id_str, e);
+    }
+    
+    Ok(())
+}
+
+/// Handle a sync protocol stream
+async fn handle_sync_stream(
+    mut send: quinn::SendStream,
+    mut recv: quinn::RecvStream,
+    peer_id: String,
+    sync_orchestrator: Arc<SyncOrchestrator>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    
+    // Read stream type/message type
+    let mut msg_type = [0u8; 1];
+    recv.read_exact(&mut msg_type).await?;
+    
+    match msg_type[0] {
+        0 => {
+            // Manifest exchange request
+            debug!("Handling manifest exchange for peer: {}", peer_id);
+            
+            // For now, just send a simple response
+            // In a full implementation, this would:
+            // 1. Read the peer's manifest
+            // 2. Compare with our local manifest
+            // 3. Schedule transfers for differences
+            // 4. Send back our manifest or diff
+            
+            let response = b"manifest_ack";
+            send.write_all(response).await?;
+            send.finish().await?;
+            
+            info!("Completed manifest exchange with peer: {}", peer_id);
+        }
+        1 => {
+            // File transfer request
+            debug!("Handling file transfer for peer: {}", peer_id);
+            
+            // Read transfer metadata (file path, chunk hash, etc.)
+            let mut metadata_len = [0u8; 4];
+            recv.read_exact(&mut metadata_len).await?;
+            let len = u32::from_be_bytes(metadata_len) as usize;
+            
+            let mut metadata = vec![0u8; len];
+            recv.read_exact(&mut metadata).await?;
+            
+            // For now, just acknowledge the transfer
+            let response = b"transfer_ack";
+            send.write_all(response).await?;
+            send.finish().await?;
+            
+            debug!("Completed file transfer handling for peer: {}", peer_id);
+        }
+        _ => {
+            warn!("Unknown message type: {}", msg_type[0]);
+            return Err("Unknown message type".into());
         }
     }
     
@@ -439,3 +535,5 @@ impl Default for Daemon {
         Self::new(DaemonConfig::default())
     }
 }
+
+use quinn;

@@ -32,7 +32,7 @@ pub enum SyncError {
     AlreadySyncing(String),
 
     #[error("Serialization error: {0}")]
-    Serialization(String),
+    Serialization(#[from] serde_json::Error),
 
     #[error("Storage error: {0}")]
     Storage(String),

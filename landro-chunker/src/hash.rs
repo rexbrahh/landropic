@@ -1,9 +1,13 @@
 use blake3;
 use std::fmt;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 /// Content hash wrapper for blake3::Hash
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ContentHash(blake3::Hash);
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ContentHash(#[cfg_attr(feature = "serde", serde(with = "hash_serde"))] blake3::Hash);
 
 impl ContentHash {
     /// Create from blake3 hash
@@ -52,3 +56,24 @@ impl fmt::Display for ContentHash {
 
 /// Chunk hash (same as content hash but semantically different)
 pub type ChunkHash = ContentHash;
+
+#[cfg(feature = "serde")]
+mod hash_serde {
+    use super::*;
+    use serde::{Deserializer, Serializer, Deserialize, Serialize};
+
+    pub fn serialize<S>(hash: &blake3::Hash, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        hash.as_bytes().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<blake3::Hash, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes: [u8; 32] = Deserialize::deserialize(deserializer)?;
+        Ok(blake3::Hash::from_bytes(bytes))
+    }
+}
