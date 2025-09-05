@@ -108,7 +108,7 @@ impl std::fmt::Display for DeviceId {
 
 impl std::str::FromStr for DeviceId {
     type Err = CryptoError;
-    
+
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         // Try to parse as hex string (64 characters for 32 bytes)
         if s.len() == 64 {
@@ -117,7 +117,7 @@ impl std::str::FromStr for DeviceId {
             Self::from_bytes(&bytes)
         } else {
             Err(CryptoError::InvalidKeyFormat(format!(
-                "Invalid DeviceId string length: {} (expected 64 hex characters)", 
+                "Invalid DeviceId string length: {} (expected 64 hex characters)",
                 s.len()
             )))
         }

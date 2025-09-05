@@ -52,7 +52,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let identity = Arc::new(DeviceIdentity::generate("server-device")?);
-//! let verifier = Arc::new(CertificateVerifier::allow_any()); // For testing
+//! let verifier = Arc::new(CertificateVerifier::for_pairing()); // For testing
 //! let config = QuicConfig::default();
 //!
 //! let mut server = QuicServer::new(identity, verifier, config);
@@ -70,7 +70,7 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let identity = Arc::new(DeviceIdentity::generate("client-device")?);
-//! let verifier = Arc::new(CertificateVerifier::allow_any());
+//! let verifier = Arc::new(CertificateVerifier::for_pairing());
 //! let config = QuicConfig::default();
 //!
 //! let client = QuicClient::new(identity, verifier, config).await?;
@@ -142,10 +142,12 @@ pub mod client;
 pub mod config;
 pub mod connection;
 pub mod errors;
+pub mod resumable;
 pub mod server;
 
 pub use client::QuicClient;
 pub use config::QuicConfig;
 pub use connection::{Connection, StreamType};
 pub use errors::{QuicError, Result};
+pub use resumable::{ResumableTransferManager, TransferCheckpoint, TransferStatus};
 pub use server::QuicServer;

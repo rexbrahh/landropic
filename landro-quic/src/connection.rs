@@ -5,7 +5,10 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::{debug, info};
 
-use landro_proto::{Hello, VersionNegotiator, PROTOCOL_VERSION};
+use landro_proto::{
+    Hello, VersionNegotiator, PROTOCOL_VERSION,
+    validation::{self, limits, Validator},
+};
 use prost::Message;
 
 use crate::errors::{QuicError, Result};
@@ -77,6 +80,17 @@ impl Connection {
 
     /// Send handshake message
     pub async fn send_hello(&self, device_id: &[u8], device_name: &str) -> Result<()> {
+        // Validate inputs
+        if device_id.len() != 32 {
+            return Err(QuicError::Protocol(format!(
+                "Invalid device ID length: expected 32 bytes, got {}",
+                device_id.len()
+            )));
+        }
+        
+        Validator::validate_device_name(device_name)
+            .map_err(|e| QuicError::Protocol(format!("Invalid device name: {}", e)))?;
+        
         let hello = Hello {
             version: PROTOCOL_VERSION.to_string(),
             device_id: device_id.to_vec(),
@@ -89,6 +103,15 @@ impl Connection {
         hello
             .encode(&mut buf)
             .map_err(|e| QuicError::Protocol(format!("Failed to encode hello: {}", e)))?;
+        
+        // Check encoded size
+        if buf.len() > limits::MAX_MESSAGE_SIZE {
+            return Err(QuicError::Protocol(format!(
+                "Hello message too large: {} bytes (max: {})",
+                buf.len(),
+                limits::MAX_MESSAGE_SIZE
+            )));
+        }
 
         // Open control stream (stream 0)
         let mut stream = self.open_uni().await?;
@@ -144,12 +167,9 @@ impl Connection {
             .map_err(|e| QuicError::Stream(format!("Failed to read message length: {}", e)))?;
         let len = u32::from_be_bytes(len_bytes) as usize;
 
-        if len > 1024 * 1024 {
-            return Err(QuicError::Protocol(format!(
-                "Hello message too large: {}",
-                len
-            )));
-        }
+        // Validate message size
+        Validator::validate_message_size(len)
+            .map_err(|e| QuicError::Protocol(format!("Invalid message size: {}", e)))?;
 
         // Read message data
         let mut buf = vec![0u8; len];
@@ -162,23 +182,9 @@ impl Connection {
         let hello = Hello::decode(&buf[..])
             .map_err(|e| QuicError::Protocol(format!("Failed to decode hello: {}", e)))?;
 
-        // Verify protocol version compatibility
-        if !VersionNegotiator::is_compatible(&hello.version) {
-            return Err(QuicError::version_mismatch(VersionNegotiator::compatibility_error(&hello.version)));
-        }
-
-        // Validate device ID format
-        if hello.device_id.len() != 32 {
-            return Err(QuicError::handshake_failed(format!(
-                "Invalid device ID length: expected 32 bytes, got {}",
-                hello.device_id.len()
-            )));
-        }
-
-        // Validate device name is not empty
-        if hello.device_name.trim().is_empty() {
-            return Err(QuicError::handshake_failed("Device name cannot be empty"));
-        }
+        // Validate hello message using comprehensive validation
+        validation::validate_hello(&hello)
+            .map_err(|e| QuicError::Protocol(format!("Invalid hello message: {}", e)))?;
 
         // Store remote device information
         *self.remote_device_id.lock().await = Some(hello.device_id.clone());
@@ -205,7 +211,8 @@ impl Connection {
 
     /// Perform client-side handshake (send hello, then receive response)
     pub async fn client_handshake(&self, device_id: &[u8], device_name: &str) -> Result<()> {
-        self.client_handshake_with_timeout(device_id, device_name, Duration::from_secs(10)).await
+        self.client_handshake_with_timeout(device_id, device_name, Duration::from_secs(10))
+            .await
     }
 
     /// Perform client-side handshake with custom timeout
@@ -218,9 +225,9 @@ impl Connection {
         let timeout_secs = handshake_timeout.as_secs();
         let handshake_future = async {
             // Client: Send our hello first
-            self.send_hello(device_id, device_name).await.map_err(|e| {
-                QuicError::handshake_failed(format!("Failed to send hello: {}", e))
-            })?;
+            self.send_hello(device_id, device_name)
+                .await
+                .map_err(|e| QuicError::handshake_failed(format!("Failed to send hello: {}", e)))?;
 
             // Client: Receive server's hello response
             self.receive_hello().await.map_err(|e| {
@@ -238,7 +245,8 @@ impl Connection {
 
     /// Perform server-side handshake (receive hello, then send response)
     pub async fn server_handshake(&self, device_id: &[u8], device_name: &str) -> Result<()> {
-        self.server_handshake_with_timeout(device_id, device_name, Duration::from_secs(10)).await
+        self.server_handshake_with_timeout(device_id, device_name, Duration::from_secs(10))
+            .await
     }
 
     /// Perform server-side handshake with custom timeout

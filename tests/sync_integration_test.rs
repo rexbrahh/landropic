@@ -21,18 +21,22 @@ async fn test_folder_indexing_and_manifest_creation() {
 
     // Create test folder structure
     fs::create_dir_all(&test_folder).await.unwrap();
-    fs::write(test_folder.join("file1.txt"), b"Hello, World!").await.unwrap();
-    fs::write(test_folder.join("file2.txt"), b"Test content").await.unwrap();
-    
+    fs::write(test_folder.join("file1.txt"), b"Hello, World!")
+        .await
+        .unwrap();
+    fs::write(test_folder.join("file2.txt"), b"Test content")
+        .await
+        .unwrap();
+
     let subdir = test_folder.join("subdir");
     fs::create_dir_all(&subdir).await.unwrap();
-    fs::write(subdir.join("file3.txt"), b"Nested file").await.unwrap();
+    fs::write(subdir.join("file3.txt"), b"Nested file")
+        .await
+        .unwrap();
 
     // Create indexer and index the folder
     let config = IndexerConfig::default();
-    let mut indexer = FileIndexer::new(&cas_dir, &db_path, config)
-        .await
-        .unwrap();
+    let mut indexer = FileIndexer::new(&cas_dir, &db_path, config).await.unwrap();
 
     let manifest = indexer.index_folder(&test_folder).await.unwrap();
 
@@ -57,21 +61,29 @@ async fn test_manifest_comparison() {
 
     // Create initial files
     fs::create_dir_all(&test_folder).await.unwrap();
-    fs::write(test_folder.join("file1.txt"), b"Initial content").await.unwrap();
-    fs::write(test_folder.join("file2.txt"), b"Another file").await.unwrap();
-
-    let config = IndexerConfig::default();
-    let mut indexer = FileIndexer::new(&cas_dir, &db_path, config)
+    fs::write(test_folder.join("file1.txt"), b"Initial content")
         .await
         .unwrap();
+    fs::write(test_folder.join("file2.txt"), b"Another file")
+        .await
+        .unwrap();
+
+    let config = IndexerConfig::default();
+    let mut indexer = FileIndexer::new(&cas_dir, &db_path, config).await.unwrap();
 
     // Create first manifest
     let manifest1 = indexer.index_folder(&test_folder).await.unwrap();
 
     // Modify files
-    fs::write(test_folder.join("file1.txt"), b"Modified content").await.unwrap();
-    fs::write(test_folder.join("file3.txt"), b"New file").await.unwrap();
-    fs::remove_file(test_folder.join("file2.txt")).await.unwrap();
+    fs::write(test_folder.join("file1.txt"), b"Modified content")
+        .await
+        .unwrap();
+    fs::write(test_folder.join("file3.txt"), b"New file")
+        .await
+        .unwrap();
+    fs::remove_file(test_folder.join("file2.txt"))
+        .await
+        .unwrap();
 
     // Create second manifest
     let manifest2 = indexer.index_folder(&test_folder).await.unwrap();
@@ -81,36 +93,30 @@ async fn test_manifest_comparison() {
     // manifest1 is the old state (file1, file2)
     // manifest2 is the new state (file1 modified, file3 added, file2 removed)
     let diff = manifest1.diff(&manifest2);
-    
+
     assert!(diff.has_changes());
     // file1.txt was modified (exists in both, different content)
     assert!(diff.modified.iter().any(|f| f.path.contains("file1.txt")));
-    // file3.txt was deleted from manifest1's perspective (exists in manifest2, not in manifest1)
-    assert!(diff.deleted.iter().any(|f| f.path.contains("file3.txt")));
-    // file2.txt was added from manifest1's perspective (exists in manifest1, not in manifest2)
-    assert!(diff.added.iter().any(|f| f.path.contains("file2.txt")));
+    // file3.txt was added (exists in manifest2, not in manifest1)
+    assert!(diff.added.iter().any(|f| f.path.contains("file3.txt")));
+    // file2.txt was deleted (exists in manifest1, not in manifest2)
+    assert!(diff.deleted.iter().any(|f| f.path.contains("file2.txt")));
 }
 
 #[tokio::test]
 async fn test_sync_protocol_handshake() {
     // Create two sync handlers (simulating two peers)
-    let handler1 = SyncProtocolHandler::new(
-        vec![1, 2, 3, 4],
-        "device-1".to_string(),
-    );
-    
-    let handler2 = SyncProtocolHandler::new(
-        vec![5, 6, 7, 8],
-        "device-2".to_string(),
-    );
+    let handler1 = SyncProtocolHandler::new(vec![1, 2, 3, 4], "device-1".to_string());
+
+    let handler2 = SyncProtocolHandler::new(vec![5, 6, 7, 8], "device-2".to_string());
 
     // Device 1 creates hello message
     let hello1 = handler1.create_hello();
-    
+
     // Device 2 receives and responds
     let hello2 = handler2.handle_hello(hello1).await.unwrap();
     assert_eq!(handler2.state().await, SyncState::Connected);
-    
+
     // Device 1 receives response
     handler1.handle_hello(hello2).await.unwrap();
     assert_eq!(handler1.state().await, SyncState::Connected);
@@ -118,12 +124,9 @@ async fn test_sync_protocol_handshake() {
 
 #[tokio::test]
 async fn test_sync_protocol_folder_sync() {
-    use landro_proto::{FolderSummary, Manifest as ProtoManifest, FileEntry as ProtoFileEntry};
-    
-    let handler = SyncProtocolHandler::new(
-        vec![1, 2, 3, 4],
-        "test-device".to_string(),
-    );
+    use landro_proto::{FileEntry as ProtoFileEntry, FolderSummary, Manifest as ProtoManifest};
+
+    let handler = SyncProtocolHandler::new(vec![1, 2, 3, 4], "test-device".to_string());
 
     // Establish connection first
     let peer_hello = handler.create_hello();
@@ -145,23 +148,21 @@ async fn test_sync_protocol_folder_sync() {
     // Send manifest
     let manifest = ProtoManifest {
         folder_id: "test-folder".to_string(),
-        files: vec![
-            ProtoFileEntry {
-                path: "file1.txt".to_string(),
-                size: 100,
-                mode: 0o644,
-                modified: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
-                chunk_hashes: vec![vec![1, 2], vec![3, 4]],
-                content_hash: vec![5, 6],
-            },
-        ],
+        files: vec![ProtoFileEntry {
+            path: "file1.txt".to_string(),
+            size: 100,
+            mode: 0o644,
+            modified: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
+            chunk_hashes: vec![vec![1, 2], vec![3, 4]],
+            content_hash: vec![5, 6],
+        }],
         generated_at: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
         manifest_hash: vec![7, 8, 9],
     };
 
     let want = handler.handle_manifest(manifest).await.unwrap();
     assert_eq!(want.chunk_hashes.len(), 2); // Should request both chunks
-    
+
     // Check progress tracking
     let progress = handler.get_progress().await;
     assert!(progress.contains_key("test-folder"));
@@ -184,9 +185,10 @@ async fn test_file_watcher_detection() {
         ..Default::default()
     };
     let mut watcher = FolderWatcher::new(config).unwrap();
-    
+
     // Start watching
-    watcher.watch_folder(&test_folder, "test-folder-id".to_string())
+    watcher
+        .watch_folder(&test_folder, "test-folder-id".to_string())
         .await
         .unwrap();
 
@@ -211,23 +213,27 @@ async fn test_file_watcher_detection() {
 #[tokio::test]
 async fn test_end_to_end_sync_scenario() {
     // This test simulates a complete sync scenario between two devices
-    
+
     // Setup for device 1
     let temp_dir1 = tempdir().unwrap();
     let cas_dir1 = temp_dir1.path().join("cas");
     let db_path1 = temp_dir1.path().join("index.db");
     let folder1 = temp_dir1.path().join("sync_folder");
-    
+
     fs::create_dir_all(&folder1).await.unwrap();
-    fs::write(folder1.join("doc1.txt"), b"Document 1").await.unwrap();
-    fs::write(folder1.join("doc2.txt"), b"Document 2").await.unwrap();
+    fs::write(folder1.join("doc1.txt"), b"Document 1")
+        .await
+        .unwrap();
+    fs::write(folder1.join("doc2.txt"), b"Document 2")
+        .await
+        .unwrap();
 
     // Setup for device 2
     let temp_dir2 = tempdir().unwrap();
     let cas_dir2 = temp_dir2.path().join("cas");
     let db_path2 = temp_dir2.path().join("index.db");
     let folder2 = temp_dir2.path().join("sync_folder");
-    
+
     fs::create_dir_all(&folder2).await.unwrap();
 
     // Create indexers
@@ -265,8 +271,14 @@ async fn test_end_to_end_sync_scenario() {
     let mut watcher2 = FolderWatcher::new(watcher_config).unwrap();
 
     // Start watching both folders
-    watcher1.watch_folder(&folder1, "folder1".to_string()).await.unwrap();
-    watcher2.watch_folder(&folder2, "folder2".to_string()).await.unwrap();
+    watcher1
+        .watch_folder(&folder1, "folder1".to_string())
+        .await
+        .unwrap();
+    watcher2
+        .watch_folder(&folder2, "folder2".to_string())
+        .await
+        .unwrap();
 
     // Verify both folders are being watched
     assert_eq!(watcher1.watched_folders().await.len(), 1);
@@ -280,12 +292,12 @@ async fn test_concurrent_file_operations() {
     let cas_dir = temp_dir.path().join("cas");
     let db_path = temp_dir.path().join("index.db");
     let test_folder = temp_dir.path().join("concurrent_test");
-    
+
     fs::create_dir_all(&test_folder).await.unwrap();
 
     let config = IndexerConfig::default();
     let indexer = Arc::new(RwLock::new(
-        FileIndexer::new(&cas_dir, &db_path, config).await.unwrap()
+        FileIndexer::new(&cas_dir, &db_path, config).await.unwrap(),
     ));
 
     // Create multiple files concurrently
@@ -294,7 +306,9 @@ async fn test_concurrent_file_operations() {
         let folder = test_folder.clone();
         let handle = tokio::spawn(async move {
             let file_path = folder.join(format!("file_{}.txt", i));
-            fs::write(file_path, format!("Content {}", i)).await.unwrap();
+            fs::write(file_path, format!("Content {}", i))
+                .await
+                .unwrap();
         });
         handles.push(handle);
     }
@@ -305,11 +319,16 @@ async fn test_concurrent_file_operations() {
     }
 
     // Index the folder
-    let manifest = indexer.write().await.index_folder(&test_folder).await.unwrap();
-    
+    let manifest = indexer
+        .write()
+        .await
+        .index_folder(&test_folder)
+        .await
+        .unwrap();
+
     // Verify all files were indexed
     assert_eq!(manifest.file_count(), 10);
-    
+
     // Verify each file is in the manifest
     for i in 0..10 {
         let file_name = format!("file_{}.txt", i);

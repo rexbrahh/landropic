@@ -35,7 +35,7 @@ members = [
     "landro-cas",
     "landro-index",
     "landro-daemon",
-    "landro-cli",
+    "landro-cli", "landro-sync",
 ]
 resolver = "2"
 
@@ -50,6 +50,7 @@ repository = "https://github.com/landropic/landropic"
 [workspace.dependencies]
 # Core async runtime
 tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
 
 # Networking
 quinn = "0.11"

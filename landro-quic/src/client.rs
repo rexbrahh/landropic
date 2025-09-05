@@ -25,7 +25,7 @@ use crate::errors::{QuicError, Result};
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let identity = Arc::new(DeviceIdentity::generate("my-device")?);
-/// let verifier = Arc::new(CertificateVerifier::allow_any()); // For pairing/testing
+/// let verifier = Arc::new(CertificateVerifier::for_pairing()); // For pairing/testing
 /// let config = QuicConfig::default();
 ///
 /// let client = QuicClient::new(identity, verifier, config).await?;

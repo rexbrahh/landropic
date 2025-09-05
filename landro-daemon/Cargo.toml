@@ -12,6 +12,7 @@ landro-quic = { path = "../landro-quic" }
 landro-chunker = { path = "../landro-chunker" }
 landro-cas = { path = "../landro-cas" }
 landro-index = { path = "../landro-index" }
+landro-sync = { path = "../landro-sync" }
 
 tokio = { workspace = true }
 mdns-sd = { workspace = true }
@@ -23,6 +24,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 gethostname = "0.4"
 hex = { workspace = true }
+whoami = "1.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }

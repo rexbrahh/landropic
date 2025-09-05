@@ -105,7 +105,10 @@ mod tests {
         let timeout_err = QuicError::HandshakeTimeout { timeout_secs: 10 };
         assert!(timeout_err.is_recoverable());
 
-        let io_err = QuicError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "test"));
+        let io_err = QuicError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "test",
+        ));
         assert!(io_err.is_recoverable());
 
         let version_err = QuicError::version_mismatch("incompatible");
@@ -118,6 +121,9 @@ mod tests {
         assert_eq!(handshake_err.to_string(), "Handshake failed: test reason");
 
         let timeout_err = QuicError::HandshakeTimeout { timeout_secs: 15 };
-        assert_eq!(timeout_err.to_string(), "Handshake timeout after 15 seconds");
+        assert_eq!(
+            timeout_err.to_string(),
+            "Handshake timeout after 15 seconds"
+        );
     }
 }

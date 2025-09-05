@@ -3,13 +3,12 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tracing::{debug, warn};
 use tokio::fs;
+use tracing::{debug, warn};
 
 use crate::errors::{CryptoError, Result};
 use crate::identity::{DeviceId, DeviceIdentity};
 use crate::secure_verifier::{LandropicCertVerifier, LandropicClientCertVerifier};
-
 
 /// Generates TLS certificates for secure QUIC connections between Landropic devices.
 ///
@@ -225,16 +224,16 @@ impl CertificateVerifier {
     }
 
     /// Create a verifier that allows connections from any device (for pairing)
-    /// 
+    ///
     /// # Security Warning
-    /// 
+    ///
     /// This method creates a verifier that accepts certificates from ANY device,
     /// effectively disabling certificate validation. This should ONLY be used:
-    /// 
+    ///
     /// 1. During initial device pairing when devices don't yet trust each other
     /// 2. In unit tests that don't require proper certificate validation
     /// 3. In integration tests where certificate setup is not the focus
-    /// 
+    ///
     /// NEVER use this in production code paths outside of pairing.
     #[cfg(any(test, feature = "dangerous-allow-any"))]
     pub fn allow_any() -> Self {
@@ -245,11 +244,13 @@ impl CertificateVerifier {
             allow_untrusted: true,
         }
     }
-    
+
     /// Create a verifier for device pairing that temporarily allows untrusted connections
     /// This is the production-safe way to handle initial device pairing
     pub fn for_pairing() -> Self {
-        warn!("Creating certificate verifier for device pairing - will accept untrusted certificates");
+        warn!(
+            "Creating certificate verifier for device pairing - will accept untrusted certificates"
+        );
         Self {
             trusted_device_ids: Vec::new(),
             trusted_certificates: HashMap::new(),
@@ -281,7 +282,11 @@ impl CertificateVerifier {
     }
 
     /// Add a trusted device with its certificate
-    pub fn add_trusted_device_with_cert(&mut self, device_id: DeviceId, cert: CertificateDer<'static>) {
+    pub fn add_trusted_device_with_cert(
+        &mut self,
+        device_id: DeviceId,
+        cert: CertificateDer<'static>,
+    ) {
         if !self.trusted_device_ids.contains(&device_id) {
             debug!("Added trusted device with certificate: {}", device_id);
             self.trusted_device_ids.push(device_id.clone());
@@ -324,7 +329,10 @@ impl CertificateVerifier {
                             device_id_bytes.copy_from_slice(ext.value);
                             return Some(DeviceId(device_id_bytes));
                         } else {
-                            warn!("Device ID extension has wrong length: {} (expected 32)", ext.value.len());
+                            warn!(
+                                "Device ID extension has wrong length: {} (expected 32)",
+                                ext.value.len()
+                            );
                         }
                     }
                 }
@@ -348,12 +356,18 @@ impl CertificateVerifier {
         for (device_id, cert) in &self.trusted_certificates {
             let cert_file = cert_dir.join(format!("{}.pem", device_id.to_hex()));
             let cert_pem = pem::encode(&pem::Pem::new("CERTIFICATE", cert.as_ref().to_vec()));
-            
-            fs::write(&cert_file, cert_pem)
-                .await
-                .map_err(|e| CryptoError::Storage(format!("Failed to write certificate for {}: {}", device_id, e)))?;
-            
-            debug!("Saved certificate for device {} to {:?}", device_id, cert_file);
+
+            fs::write(&cert_file, cert_pem).await.map_err(|e| {
+                CryptoError::Storage(format!(
+                    "Failed to write certificate for {}: {}",
+                    device_id, e
+                ))
+            })?;
+
+            debug!(
+                "Saved certificate for device {} to {:?}",
+                device_id, cert_file
+            );
         }
 
         Ok(())
@@ -362,7 +376,7 @@ impl CertificateVerifier {
     /// Load trusted certificates from disk
     pub async fn load_trusted_certificates<P: AsRef<Path>>(&mut self, cert_dir: P) -> Result<()> {
         let cert_dir = cert_dir.as_ref();
-        
+
         if !cert_dir.exists() {
             debug!("Certificate directory does not exist: {:?}", cert_dir);
             return Ok(()); // No certificates to load
@@ -372,7 +386,8 @@ impl CertificateVerifier {
             .await
             .map_err(|e| CryptoError::Storage(format!("Failed to read cert directory: {}", e)))?;
 
-        while let Some(entry) = dir.next_entry()
+        while let Some(entry) = dir
+            .next_entry()
             .await
             .map_err(|e| CryptoError::Storage(format!("Failed to read directory entry: {}", e)))?
         {
@@ -382,7 +397,10 @@ impl CertificateVerifier {
                     if let Ok(device_id) = file_stem.parse::<DeviceId>() {
                         match self.load_certificate_file(&path).await {
                             Ok(cert) => {
-                                debug!("Loaded certificate for device {} from {:?}", device_id, path);
+                                debug!(
+                                    "Loaded certificate for device {} from {:?}",
+                                    device_id, path
+                                );
                                 self.add_trusted_device_with_cert(device_id, cert);
                             }
                             Err(e) => {
@@ -397,16 +415,22 @@ impl CertificateVerifier {
         Ok(())
     }
 
-    async fn load_certificate_file<P: AsRef<Path>>(&self, cert_file: P) -> Result<CertificateDer<'static>> {
+    async fn load_certificate_file<P: AsRef<Path>>(
+        &self,
+        cert_file: P,
+    ) -> Result<CertificateDer<'static>> {
         let cert_pem = fs::read_to_string(cert_file)
             .await
             .map_err(|e| CryptoError::Storage(format!("Failed to read certificate file: {}", e)))?;
-        
-        let pem = pem::parse(&cert_pem)
-            .map_err(|e| CryptoError::CertificateValidation(format!("Invalid PEM format: {}", e)))?;
-        
+
+        let pem = pem::parse(&cert_pem).map_err(|e| {
+            CryptoError::CertificateValidation(format!("Invalid PEM format: {}", e))
+        })?;
+
         if pem.tag() != "CERTIFICATE" {
-            return Err(CryptoError::CertificateValidation("Not a certificate PEM".to_string()));
+            return Err(CryptoError::CertificateValidation(
+                "Not a certificate PEM".to_string(),
+            ));
         }
 
         Ok(CertificateDer::from(pem.contents().to_vec()))
@@ -424,7 +448,7 @@ impl TlsConfig {
         verifier: Arc<CertificateVerifier>,
     ) -> Result<rustls::ServerConfig> {
         let client_verifier = Arc::new(LandropicClientCertVerifier::new(verifier));
-        
+
         let config = rustls::ServerConfig::builder()
             .with_client_cert_verifier(client_verifier)
             .with_single_cert(cert_chain, private_key)
@@ -454,7 +478,7 @@ impl TlsConfig {
         verifier: Arc<CertificateVerifier>,
     ) -> Result<rustls::ClientConfig> {
         let cert_verifier = Arc::new(LandropicCertVerifier::new(verifier, true)); // Allow self-signed certs for landropic
-        
+
         let config = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(cert_verifier)
@@ -471,9 +495,9 @@ impl TlsConfig {
         private_key: PrivateKeyDer<'static>,
     ) -> Result<rustls::ClientConfig> {
         use crate::secure_verifier::DangerousAcceptAnyServerCert;
-        
+
         warn!("SECURITY WARNING: Creating TLS configuration that accepts ANY certificate - ONLY use for initial device pairing");
-        
+
         let config = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(DangerousAcceptAnyServerCert))

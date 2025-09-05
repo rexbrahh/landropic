@@ -1,13 +1,12 @@
-use chrono::{DateTime, Utc};
-use landro_cas::{ContentStore, ObjectRef};
+use chrono::DateTime;
+use landro_cas::ContentStore;
 use landro_chunker::{Chunker, ChunkerConfig};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tokio::io::AsyncReadExt;
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
-use crate::database::{ChunkEntry, FileEntry, IndexDatabase};
+use crate::database::{ChunkEntry, FileEntry};
+use crate::database_pool::DatabasePool;
 use crate::errors::{IndexError, Result};
 use crate::manifest::{Manifest, ManifestEntry};
 
@@ -38,10 +37,12 @@ impl Default for IndexerConfig {
 }
 
 /// File indexer that coordinates chunking, storage, and database operations
+///
+/// This struct is now Send + Sync safe thanks to DatabasePool
 pub struct FileIndexer {
     chunker: Chunker,
     cas: ContentStore,
-    database: IndexDatabase,
+    database: DatabasePool,
     config: IndexerConfig,
 }
 
@@ -59,7 +60,7 @@ impl FileIndexer {
             .await
             .map_err(|e| IndexError::StorageError(e.to_string()))?;
 
-        let database = IndexDatabase::open(database_path)?;
+        let database = DatabasePool::new(database_path)?;
 
         Ok(Self {
             chunker,
@@ -75,15 +76,17 @@ impl FileIndexer {
         info!("Starting folder indexing: {:?}", folder_path);
 
         // Generate folder ID from canonical path
-        let canonical_path = folder_path
-            .canonicalize()
-            .map_err(|e| IndexError::Io(e))?;
-        
+        let canonical_path = folder_path.canonicalize().map_err(|e| IndexError::Io(e))?;
+
         let folder_id = Self::path_to_folder_id(&canonical_path);
 
         // Get the next version number (check for existing manifests)
-        let next_version = self.database.get_latest_manifest_version(&folder_id)
-            .unwrap_or(0) + 1;
+        let next_version = self
+            .database
+            .get_latest_manifest_version(folder_id.clone())
+            .await?
+            .unwrap_or(0)
+            + 1;
 
         // Create new manifest with incremented version
         let mut manifest = Manifest::new(folder_id, next_version);
@@ -109,7 +112,7 @@ impl FileIndexer {
         manifest.finalize();
 
         // Save manifest to database
-        self.database.save_manifest(&manifest)?;
+        self.database.save_manifest(manifest.clone()).await?;
 
         info!(
             "Folder indexing completed: {} files, {} total bytes",
@@ -141,7 +144,10 @@ impl FileIndexer {
             .await
             .map_err(|e| IndexError::Io(e))?;
 
-        let chunks = self.chunker.chunk_stream(&mut file).await
+        let chunks = self
+            .chunker
+            .chunk_stream(&mut file)
+            .await
             .map_err(|e| IndexError::ChunkerError(e.to_string()))?;
 
         // Store chunks in CAS and collect references
@@ -150,7 +156,9 @@ impl FileIndexer {
 
         for chunk in chunks {
             // Store chunk in CAS
-            let obj_ref = self.cas.write(&chunk.data)
+            let obj_ref = self
+                .cas
+                .write(&chunk.data)
                 .await
                 .map_err(|e| IndexError::StorageError(e.to_string()))?;
 
@@ -164,7 +172,7 @@ impl FileIndexer {
                 size: chunk.data.len() as u64,
                 ref_count: 1,
             };
-            self.database.upsert_chunk(&chunk_entry)?;
+            self.database.upsert_chunk(chunk_entry).await?;
         }
 
         // Calculate file content hash from chunk hashes
@@ -184,7 +192,7 @@ impl FileIndexer {
         };
 
         // Store file entry in database
-        let file_id = self.database.upsert_file(&file_entry)?;
+        let _file_id = self.database.upsert_file(file_entry).await?;
 
         // TODO: Store file-chunk mappings in database
         // This will be implemented when we add the file-chunk mapping functionality
@@ -210,10 +218,7 @@ impl FileIndexer {
                 .await
                 .map_err(|e| IndexError::Io(e))?;
 
-            while let Some(entry) = entries.next_entry()
-                .await
-                .map_err(|e| IndexError::Io(e))?
-            {
+            while let Some(entry) = entries.next_entry().await.map_err(|e| IndexError::Io(e))? {
                 let path = entry.path();
 
                 // Skip if matches ignore patterns
@@ -222,9 +227,7 @@ impl FileIndexer {
                     continue;
                 }
 
-                let file_type = entry.file_type()
-                    .await
-                    .map_err(|e| IndexError::Io(e))?;
+                let file_type = entry.file_type().await.map_err(|e| IndexError::Io(e))?;
 
                 if file_type.is_file() {
                     files.push(path);
@@ -232,10 +235,8 @@ impl FileIndexer {
                     dirs_to_process.push(path);
                 } else if file_type.is_symlink() && self.config.follow_symlinks {
                     // Handle symlinks if configured to follow them
-                    let target = fs::read_link(&path)
-                        .await
-                        .map_err(|e| IndexError::Io(e))?;
-                    
+                    let target = fs::read_link(&path).await.map_err(|e| IndexError::Io(e))?;
+
                     if target.is_file() {
                         files.push(path);
                     } else if target.is_dir() {
@@ -251,9 +252,7 @@ impl FileIndexer {
 
     /// Check if path should be ignored based on patterns
     fn should_ignore(&self, path: &Path) -> bool {
-        let name = path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         for pattern in &self.config.ignore_patterns {
             if pattern.contains('*') {
@@ -285,7 +284,7 @@ impl FileIndexer {
     /// Calculate file content hash from chunk hashes
     fn calculate_file_hash(chunk_hashes: &[String]) -> String {
         use blake3::Hasher;
-        
+
         let mut hasher = Hasher::new();
         for chunk_hash in chunk_hashes {
             hasher.update(chunk_hash.as_bytes());
@@ -296,7 +295,7 @@ impl FileIndexer {
     /// Generate folder ID from canonical path
     fn path_to_folder_id(path: &Path) -> String {
         use blake3::Hasher;
-        
+
         let mut hasher = Hasher::new();
         hasher.update(path.to_string_lossy().as_bytes());
         hex::encode(hasher.finalize().as_bytes())
@@ -318,23 +317,27 @@ impl FileIndexer {
 
     /// Get storage statistics
     pub async fn storage_stats(&self) -> Result<StorageStatistics> {
-        let cas_stats = self.cas.stats()
+        let cas_stats = self
+            .cas
+            .stats()
             .await
             .map_err(|e| IndexError::StorageError(e.to_string()))?;
 
         // TODO: Add database statistics
-        
+
         Ok(StorageStatistics {
             total_objects: cas_stats.object_count,
             total_storage_bytes: cas_stats.total_size,
-            total_files: 0, // Will be populated from database
+            total_files: 0,  // Will be populated from database
             total_chunks: 0, // Will be populated from database
         })
     }
 
     /// Verify integrity of stored objects
     pub async fn verify_integrity(&self) -> Result<IntegrityReport> {
-        let cas_report = self.cas.verify_integrity()
+        let cas_report = self
+            .cas
+            .verify_integrity()
             .await
             .map_err(|e| IndexError::StorageError(e.to_string()))?;
 
@@ -378,11 +381,9 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let cas_dir = temp_dir.path().join("cas");
         let db_path = temp_dir.path().join("index.db");
-        
+
         let config = IndexerConfig::default();
-        let mut indexer = FileIndexer::new(&cas_dir, &db_path, config)
-            .await
-            .unwrap();
+        let mut indexer = FileIndexer::new(&cas_dir, &db_path, config).await.unwrap();
 
         // Create a test file
         let test_file = temp_dir.path().join("test.txt");
@@ -393,7 +394,7 @@ mod tests {
 
         // Index the file
         let manifest_entry = indexer.index_file(&test_file).await.unwrap();
-        
+
         assert_eq!(manifest_entry.size, test_data.len() as u64);
         assert!(!manifest_entry.chunk_hashes.is_empty());
         assert!(!manifest_entry.content_hash.is_empty());
@@ -404,22 +405,20 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let cas_dir = temp_dir.path().join("cas");
         let db_path = temp_dir.path().join("index.db");
-        
+
         // Create test directory structure
         let test_root = temp_dir.path().join("test_folder");
         fs::create_dir_all(&test_root).await.unwrap();
-        
+
         let file1 = test_root.join("file1.txt");
         let file2 = test_root.join("subdir").join("file2.txt");
         fs::create_dir_all(file2.parent().unwrap()).await.unwrap();
-        
+
         fs::write(&file1, b"Content 1").await.unwrap();
         fs::write(&file2, b"Content 2").await.unwrap();
-        
+
         let config = IndexerConfig::default();
-        let mut indexer = FileIndexer::new(&cas_dir, &db_path, config)
-            .await
-            .unwrap();
+        let mut indexer = FileIndexer::new(&cas_dir, &db_path, config).await.unwrap();
 
         let files = indexer.walk_directory(&test_root).await.unwrap();
         assert_eq!(files.len(), 2);

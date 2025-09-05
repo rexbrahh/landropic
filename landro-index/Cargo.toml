@@ -19,7 +19,18 @@ tracing = { workspace = true }
 blake3 = { workspace = true }
 hex = { workspace = true }
 notify = { workspace = true }
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+async-trait = "0.1"
+
+# Platform-specific dependencies
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = { version = "0.3", features = ["fileapi", "handleapi", "winbase", "winnt", "ioapiset"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["test-util", "macros"] }
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+futures = { version = "0.3" }
+tracing-subscriber = { version = "0.3" }

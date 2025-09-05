@@ -12,6 +12,8 @@ serde = { workspace = true, optional = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 hex = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }
 
 [build-dependencies]
 prost-build = "0.13"

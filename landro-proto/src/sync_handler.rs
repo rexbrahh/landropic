@@ -112,7 +112,7 @@ impl SyncProtocolHandler {
     /// Handle incoming Hello message
     pub async fn handle_hello(&self, hello: Hello) -> Result<Hello, ProtoError> {
         let mut state = self.state.write().await;
-        
+
         // Check if we're in the right state
         if *state != SyncState::WaitingForHello {
             return Err(ProtoError {
@@ -154,12 +154,9 @@ impl SyncProtocolHandler {
     }
 
     /// Handle folder summary message
-    pub async fn handle_folder_summary(
-        &self,
-        summary: FolderSummary,
-    ) -> Result<(), ProtoError> {
+    pub async fn handle_folder_summary(&self, summary: FolderSummary) -> Result<(), ProtoError> {
         let state = self.state.read().await;
-        
+
         if *state != SyncState::Connected && *state != SyncState::Syncing {
             return Err(ProtoError {
                 error_type: ErrorType::InvalidRequest as i32,
@@ -175,7 +172,10 @@ impl SyncProtocolHandler {
 
         // Initialize progress tracking for this folder
         let mut progress = self.folder_progress.write().await;
-        progress.insert(summary.folder_id.clone(), FolderSyncProgress::new(summary.folder_id));
+        progress.insert(
+            summary.folder_id.clone(),
+            FolderSyncProgress::new(summary.folder_id),
+        );
 
         // Update state to syncing if not already
         if *state == SyncState::Connected {
@@ -189,7 +189,7 @@ impl SyncProtocolHandler {
     /// Handle manifest message
     pub async fn handle_manifest(&self, manifest: Manifest) -> Result<Want, ProtoError> {
         let state = self.state.read().await;
-        
+
         if *state != SyncState::Syncing {
             return Err(ProtoError {
                 error_type: ErrorType::InvalidRequest as i32,
@@ -232,7 +232,7 @@ impl SyncProtocolHandler {
     /// Handle Want message (peer requesting chunks from us)
     pub async fn handle_want(&self, want: Want) -> Result<Vec<ChunkData>, ProtoError> {
         let state = self.state.read().await;
-        
+
         if *state != SyncState::Syncing {
             return Err(ProtoError {
                 error_type: ErrorType::InvalidRequest as i32,
@@ -261,7 +261,7 @@ impl SyncProtocolHandler {
     /// Handle chunk data received
     pub async fn handle_chunk_data(&self, chunk: ChunkData) -> Result<Ack, ProtoError> {
         let state = self.state.read().await;
-        
+
         if *state != SyncState::Syncing {
             return Err(ProtoError {
                 error_type: ErrorType::InvalidRequest as i32,
@@ -270,14 +270,18 @@ impl SyncProtocolHandler {
             });
         }
 
-        trace!("Received chunk: {} ({} bytes)", hex::encode(&chunk.hash), chunk.data.len());
+        trace!(
+            "Received chunk: {} ({} bytes)",
+            hex::encode(&chunk.hash),
+            chunk.data.len()
+        );
 
         // Update progress
         let mut progress = self.folder_progress.write().await;
         for folder_progress in progress.values_mut() {
             if folder_progress.pending_chunks.remove(&chunk.hash) {
                 folder_progress.received_chunks += 1;
-                
+
                 // Check if this folder is complete
                 if folder_progress.is_complete() {
                     info!(
@@ -311,7 +315,7 @@ impl SyncProtocolHandler {
             "Received error from peer: {} - {}",
             error.message, error.details
         );
-        
+
         *self.state.write().await = SyncState::Failed(error.message.clone());
     }
 
@@ -338,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn test_hello_exchange() {
         let handler = SyncProtocolHandler::new(vec![1, 2, 3], "test-device".to_string());
-        
+
         // Create a peer hello
         let peer_hello = Hello {
             version: PROTOCOL_VERSION.to_string(),
@@ -350,10 +354,10 @@ mod tests {
 
         // Handle peer hello
         let our_hello = handler.handle_hello(peer_hello).await.unwrap();
-        
+
         assert_eq!(our_hello.device_name, "test-device");
         assert_eq!(handler.state().await, SyncState::Connected);
-        
+
         // Check peer info was stored
         let peer_info = handler.peer_info.read().await;
         assert!(peer_info.is_some());
@@ -363,7 +367,7 @@ mod tests {
     #[tokio::test]
     async fn test_version_mismatch() {
         let handler = SyncProtocolHandler::new(vec![1, 2, 3], "test-device".to_string());
-        
+
         // Create a peer hello with incompatible version
         let peer_hello = Hello {
             version: "2.0.0".to_string(), // Different major version
@@ -376,7 +380,7 @@ mod tests {
         // Handle peer hello should fail
         let result = handler.handle_hello(peer_hello).await;
         assert!(result.is_err());
-        
+
         let error = result.unwrap_err();
         assert_eq!(error.error_type, ErrorType::ProtocolVersionMismatch as i32);
         assert!(matches!(handler.state().await, SyncState::Failed(_)));
@@ -385,10 +389,10 @@ mod tests {
     #[tokio::test]
     async fn test_sync_progress_tracking() {
         let handler = SyncProtocolHandler::new(vec![1, 2, 3], "test-device".to_string());
-        
+
         // First establish connection
         *handler.state.write().await = SyncState::Connected;
-        
+
         // Handle folder summary
         let summary = FolderSummary {
             folder_id: "test-folder".to_string(),
@@ -398,10 +402,10 @@ mod tests {
             file_count: 10,
             last_modified: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
         };
-        
+
         handler.handle_folder_summary(summary).await.unwrap();
         assert_eq!(handler.state().await, SyncState::Syncing);
-        
+
         // Check progress was initialized
         let progress = handler.get_progress().await;
         assert!(progress.contains_key("test-folder"));
@@ -412,10 +416,10 @@ mod tests {
         let mut progress = FolderSyncProgress::new("test".to_string());
         progress.total_chunks = 100;
         progress.received_chunks = 25;
-        
+
         assert_eq!(progress.progress_percentage(), 25.0);
         assert!(!progress.is_complete());
-        
+
         progress.received_chunks = 100;
         assert_eq!(progress.progress_percentage(), 100.0);
         assert!(progress.is_complete());

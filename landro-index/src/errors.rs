@@ -34,6 +34,9 @@ pub enum IndexError {
 
     #[error("Watcher error: {0}")]
     WatcherError(String),
+
+    #[error("Database error: {0}")]
+    DatabaseError(String),
 }
 
 pub type Result<T> = std::result::Result<T, IndexError>;
