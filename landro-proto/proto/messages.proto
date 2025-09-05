@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package landro.proto;
+
+import "google/protobuf/timestamp.proto";
+
+// Initial handshake message
+message Hello {
+    string version = 1;
+    bytes device_id = 2;  // Ed25519 public key
+    string device_name = 3;
+    repeated string capabilities = 4;
+    google.protobuf.Timestamp timestamp = 5;
+}
+
+// Folder synchronization summary
+message FolderSummary {
+    string folder_id = 1;
+    string folder_path = 2;
+    bytes manifest_hash = 3;  // Blake3 hash of manifest
+    uint64 total_size = 4;
+    uint64 file_count = 5;
+    google.protobuf.Timestamp last_modified = 6;
+}
+
+// Request for missing content
+message Want {
+    string folder_id = 1;
+    repeated bytes chunk_hashes = 2;  // Blake3 hashes of wanted chunks
+    uint64 priority = 3;
+}
+
+// Acknowledgment message
+message Ack {
+    string request_id = 1;
+    bool success = 2;
+    string message = 3;
+}
+
+// Error message
+message Error {
+    enum ErrorType {
+        UNKNOWN = 0;
+        PROTOCOL_VERSION_MISMATCH = 1;
+        AUTHENTICATION_FAILED = 2;
+        FOLDER_NOT_FOUND = 3;
+        PERMISSION_DENIED = 4;
+        STORAGE_FULL = 5;
+        INVALID_REQUEST = 6;
+    }
+    
+    ErrorType error_type = 1;
+    string message = 2;
+    string details = 3;
+}
+
+// File manifest entry
+message FileEntry {
+    string path = 1;
+    uint64 size = 2;
+    uint32 mode = 3;  // Unix file permissions
+    google.protobuf.Timestamp modified = 4;
+    repeated bytes chunk_hashes = 5;  // Ordered list of chunk hashes
+    bytes content_hash = 6;  // Full file content hash
+}
+
+// Complete manifest for a folder
+message Manifest {
+    string folder_id = 1;
+    repeated FileEntry files = 2;
+    google.protobuf.Timestamp generated_at = 3;
+    bytes manifest_hash = 4;  // Self-hash for integrity
+}
+
+// Chunk data transfer
+message ChunkData {
+    bytes hash = 1;
+    bytes data = 2;
+    bool compressed = 3;
+    uint32 uncompressed_size = 4;
+}

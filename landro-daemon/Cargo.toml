@@ -1,0 +1,26 @@
+[package]
+name = "landro-daemon"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+landro-proto = { path = "../landro-proto" }
+landro-crypto = { path = "../landro-crypto" }
+landro-quic = { path = "../landro-quic" }
+landro-chunker = { path = "../landro-chunker" }
+landro-cas = { path = "../landro-cas" }
+landro-index = { path = "../landro-index" }
+
+tokio = { workspace = true }
+mdns-sd = { workspace = true }
+notify = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,20 @@
+[package]
+name = "landro-cas"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+landro-chunker = { path = "../landro-chunker" }
+
+tokio = { workspace = true, features = ["fs", "io-util"] }
+thiserror = { workspace = true }
+tempfile = { workspace = true }
+blake3 = { workspace = true }
+bytes = "1.7"
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+proptest = { workspace = true }

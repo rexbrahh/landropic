@@ -1,0 +1,84 @@
+[workspace]
+members = [
+    "landro-proto",
+    "landro-crypto", 
+    "landro-quic",
+    "landro-chunker",
+    "landro-cas",
+    "landro-index",
+    "landro-daemon",
+    "landro-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Landropic Contributors"]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/landropic/landropic"
+
+[workspace.dependencies]
+# Core async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# Networking
+quinn = "0.11"
+rustls = { version = "0.23", features = ["std", "ring"] }
+rustls-pemfile = "2.1"
+rcgen = "0.13"
+time = "0.3"
+
+# Cryptography
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+blake3 = "1.5"
+chacha20poly1305 = "0.10"
+rand = "0.8"
+zeroize = { version = "1.8", features = ["derive"] }
+
+# Serialization
+prost = "0.13"
+prost-types = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+hex = "0.4"
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+
+# File system
+notify = "6.1"
+tempfile = "3.10"
+dirs = "5.0"
+
+# Service discovery
+mdns-sd = "0.11"
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+indicatif = "0.17"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing
+proptest = "1.4"
+quickcheck = "1.0"
+criterion = "0.5"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.bench]
+inherits = "release"
