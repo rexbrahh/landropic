@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, trace, warn};
 
 use crate::generated::{
-    error::ErrorType, Ack, ChunkData, Error as ProtoError, FileEntry, FolderSummary, Hello,
+    error::ErrorType, Ack, ChunkData, Error as ProtoError, FolderSummary, Hello,
     Manifest, Want,
 };
 use crate::{VersionNegotiator, PROTOCOL_VERSION};

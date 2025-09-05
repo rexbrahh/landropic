@@ -202,6 +202,23 @@ impl ContentStore {
             .join(filename)
     }
 
+    /// Write an object to the content store using Bytes for zero-copy optimization.
+    ///
+    /// The object is written atomically using a temporary file and rename for large objects,
+    /// or stored in packfiles for small objects. If an object with the same hash already 
+    /// exists, this is a no-op. Fsync behavior is controlled by the store's configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The data to store as Bytes
+    ///
+    /// # Returns
+    ///
+    /// An ObjectRef containing the hash and size of the stored data
+    pub async fn write_bytes(&self, data: Bytes) -> Result<ObjectRef> {
+        self.write(&data[..]).await
+    }
+    
     /// Write an object to the content store.
     ///
     /// The object is written atomically using a temporary file and rename for large objects,

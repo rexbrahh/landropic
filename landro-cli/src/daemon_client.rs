@@ -5,7 +5,7 @@ use std::process::Command;
 use std::time::Duration;
 use tokio::time::timeout;
 
-const DAEMON_BASE_URL: &str = "http://127.0.0.1:7890";
+const DAEMON_BASE_URL: &str = "http://127.0.0.1:7703";
 const DAEMON_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// HTTP client for communicating with the landropic daemon
@@ -180,6 +180,44 @@ impl Client {
 
         Ok(list_response.folders)
     }
+
+    /// Get list of paired peers
+    pub async fn get_peers(&self) -> Result<Vec<PeerInfo>> {
+        let response = self
+            .client
+            .get(&format!("{}/api/peers", self.base_url))
+            .send()
+            .await
+            .context("Failed to get peers list")?;
+
+        let peers_response: PeersResponse = response
+            .json()
+            .await
+            .context("Failed to parse peers response")?;
+
+        Ok(peers_response.peers)
+    }
+
+    /// Get sync progress for a specific folder or all folders
+    pub async fn get_sync_progress(&self, folder: Option<&std::path::PathBuf>) -> Result<SyncProgressResponse> {
+        let mut url = format!("{}/api/sync/progress", self.base_url);
+        
+        if let Some(folder_path) = folder {
+            url.push_str(&format!("?folder={}", urlencoding::encode(&folder_path.to_string_lossy())));
+        }
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to get sync progress")?;
+
+        response
+            .json()
+            .await
+            .context("Failed to parse sync progress response")
+    }
 }
 
 /// Check if the daemon is running
@@ -346,6 +384,30 @@ pub struct FolderStatus {
     pub status: String,
     pub files_synced: u32,
     pub files_pending: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PeerInfo {
+    pub device_id: String,
+    pub name: String,
+    pub connected: bool,
+    pub last_seen: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PeersResponse {
+    peers: Vec<PeerInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncProgressResponse {
+    pub folder: String,
+    pub total_files: u64,
+    pub files_completed: u64,
+    pub total_bytes: u64,
+    pub bytes_completed: u64,
+    pub current_file: Option<String>,
+    pub phase: String, // "scanning", "uploading", "downloading", "complete"
 }
 
 #[cfg(test)]

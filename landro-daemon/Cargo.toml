@@ -28,6 +28,11 @@ gethostname = "0.4"
 hex = { workspace = true }
 whoami = "1.4"
 futures = "0.3"
+dirs = "5.0"
+
+[[bin]]
+name = "landro-daemon"
+path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = { workspace = true }

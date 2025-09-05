@@ -9,6 +9,7 @@ use landro_quic::QuicServer;
 use landro_sync::{SyncOrchestrator, SyncConfig};
 use landro_index::async_indexer::AsyncIndexer;
 use crate::discovery::DiscoveryService;
+use crate::network::{ConnectionManager, NetworkConfig};
 use crate::watcher::{FileWatcher, FileEventKind};
 
 /// Configuration for the daemon
@@ -42,6 +43,7 @@ impl Default for DaemonConfig {
 struct DaemonState {
     quic_server: Option<Arc<QuicServer>>,
     discovery_service: Option<Arc<Mutex<DiscoveryService>>>,
+    connection_manager: Option<Arc<ConnectionManager>>,
     sync_orchestrator: Option<Arc<SyncOrchestrator>>,
     file_watchers: Vec<FileWatcher>,
     indexer: Option<Arc<AsyncIndexer>>,
@@ -64,6 +66,7 @@ impl Daemon {
             state: Arc::new(RwLock::new(DaemonState {
                 quic_server: None,
                 discovery_service: None,
+                connection_manager: None,
                 sync_orchestrator: None,
                 file_watchers: Vec::new(),
                 indexer: None,
@@ -108,11 +111,26 @@ impl Daemon {
         let port = quic_server.local_addr().map(|addr| addr.port()).unwrap_or(9876);
         let discovery_service = self.start_discovery_service(port).await?;
         
+        // Create connection manager
+        let identity = Arc::new(landro_crypto::DeviceIdentity::generate(&self.config.device_name).map_err(|e| e.to_string())?);
+        let verifier = Arc::new(landro_crypto::CertificateVerifier::for_pairing());
+        let network_config = NetworkConfig::default();
+        let connection_manager = Arc::new(ConnectionManager::new(
+            identity,
+            verifier,
+            discovery_service.clone(),
+            network_config,
+        ));
+        
+        // Start connection manager
+        connection_manager.start().await?;
+        
         // Update state
         {
             let mut state = self.state.write().await;
             state.quic_server = Some(quic_server.clone());
             state.discovery_service = Some(discovery_service);
+            state.connection_manager = Some(connection_manager.clone());
             state.sync_orchestrator = Some(sync_orchestrator.clone());
             state.indexer = Some(indexer.clone());
         }
@@ -184,34 +202,38 @@ impl Daemon {
         quic_server: Arc<QuicServer>,
         sync_orchestrator: Arc<SyncOrchestrator>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Periodic peer discovery
-        let discovery = self.state.read().await.discovery_service.clone().unwrap();
+        // Periodic sync with discovered peers using ConnectionManager
+        let connection_manager = self.state.read().await.connection_manager.clone().unwrap();
         let sync_orch = sync_orchestrator.clone();
         
         let task = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 interval.tick().await;
                 
-                // Browse for peers
-                let browse_result = discovery.lock().await.browse_peers().await
-                    .map_err(|e| e.to_string());
-                    
-                match browse_result {
-                    Ok(peers) => {
-                        debug!("Found {} peers via mDNS", peers.len());
-                        for peer in peers {
-                            // Attempt to connect and sync
-                            if let Err(e) = sync_orch.start_sync(
-                                peer.device_id,
-                                peer.device_name,
-                            ).await {
-                                warn!("Failed to start sync with peer: {}", e);
+                // Get connection statistics and trigger sync for healthy peers
+                let stats = connection_manager.get_stats().await;
+                debug!("Connection stats: {} total peers, {} healthy", 
+                       stats.total_peers, stats.healthy_peers);
+                
+                for peer_stat in stats.peer_stats {
+                    if peer_stat.is_healthy {
+                        // Attempt to sync with healthy peer
+                        match connection_manager.get_connection(&peer_stat.peer_id).await {
+                            Ok(_conn) => {
+                                if let Err(e) = sync_orch.start_sync(
+                                    peer_stat.peer_id.clone(),
+                                    peer_stat.peer_name.clone(),
+                                ).await {
+                                    warn!("Failed to start sync with peer {}: {}", 
+                                          peer_stat.peer_id, e);
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to get connection for peer {}: {}", 
+                                      peer_stat.peer_id, e);
                             }
                         }
-                    }
-                    Err(e) => {
-                        warn!("Failed to browse peers: {}", e);
                     }
                 }
             }

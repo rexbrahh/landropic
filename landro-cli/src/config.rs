@@ -75,14 +75,14 @@ mod tests {
         let config = Config {
             device_name: "Test Device".to_string(),
             device_id: "abcd1234".to_string(),
-            daemon_port: 7890,
+            daemon_port: 7703,
             storage_path: PathBuf::from("/tmp/test"),
         };
 
         let toml_str = toml::to_string_pretty(&config).unwrap();
         assert!(toml_str.contains("device_name"));
         assert!(toml_str.contains("Test Device"));
-        assert!(toml_str.contains("daemon_port = 7890"));
+        assert!(toml_str.contains("daemon_port = 7703"));
 
         let deserialized: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(deserialized.device_name, config.device_name);
@@ -102,7 +102,7 @@ mod tests {
         let config = Config {
             device_name: "Test Device".to_string(),
             device_id: "abcd1234".to_string(),
-            daemon_port: 7890,
+            daemon_port: 7703,
             storage_path: temp_dir.path().join("storage"),
         };
 

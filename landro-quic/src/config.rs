@@ -100,8 +100,7 @@ impl QuicConfig {
             recv_buffer_size: 2 * 1024 * 1024,            // 2MB receive buffer
         }
     }
-}
-
+    
     /// Create a new configuration with default values
     pub fn new() -> Self {
         Self::default()
@@ -154,7 +153,8 @@ impl QuicConfig {
         
         // LAN optimizations
         transport.initial_rtt(Duration::from_micros(self.initial_rtt_us));
-        transport.max_ack_delay(Duration::from_millis(self.max_ack_delay_ms));
+        // max_ack_delay is not available in current quinn version
+        // transport.max_ack_delay(Duration::from_millis(self.max_ack_delay_ms));
         
         // Datagram support for small control messages
         if self.enable_datagrams {

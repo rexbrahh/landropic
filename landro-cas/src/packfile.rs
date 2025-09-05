@@ -1,8 +1,11 @@
 use blake3::Hasher;
 use bytes::Bytes;
+use memmap2::MmapOptions;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::File as StdFile;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tracing::{debug, trace, warn};
@@ -269,12 +272,20 @@ impl PackfileWriter {
     }
 }
 
-/// Reader for accessing chunks in existing packfiles
+/// Reader for accessing chunks in existing packfiles (async version)
 #[derive(Debug, Clone)]
 pub struct PackfileReader {
     file_path: PathBuf,
     entries: HashMap<ContentHash, PackfileEntry>,
     stats: PackfileStats,
+}
+
+/// Memory-mapped reader for zero-copy access to packfile chunks
+pub struct MmapPackfileReader {
+    file_path: PathBuf,
+    entries: HashMap<ContentHash, PackfileEntry>,
+    stats: PackfileStats,
+    mmap: Arc<memmap2::Mmap>,
 }
 
 impl PackfileReader {
@@ -387,6 +398,171 @@ impl PackfileReader {
     }
     
     /// Get statistics for this packfile
+    pub fn stats(&self) -> &PackfileStats {
+        &self.stats
+    }
+}
+
+impl MmapPackfileReader {
+    /// Open a packfile with memory mapping for zero-copy reads
+    pub fn open(path: &Path) -> Result<Self> {
+        // Open file for memory mapping
+        let std_file = StdFile::open(path)
+            .map_err(|e| CasError::StoragePath(format!("Failed to open packfile: {}", e)))?;
+        
+        // Create memory map
+        let mmap = unsafe {
+            MmapOptions::new()
+                .map(&std_file)
+                .map_err(|e| CasError::StoragePath(format!("Failed to memory map packfile: {}", e)))?
+        };
+        
+        let mmap = Arc::new(mmap);
+        
+        // Verify header
+        if mmap.len() < PACKFILE_HEADER_SIZE as usize {
+            return Err(CasError::InconsistentState("Packfile too small".to_string()));
+        }
+        
+        // Check magic bytes
+        if &mmap[0..PACKFILE_MAGIC.len()] != PACKFILE_MAGIC {
+            return Err(CasError::InconsistentState("Invalid packfile magic".to_string()));
+        }
+        
+        // Read version
+        let version_bytes = &mmap[PACKFILE_MAGIC.len()..PACKFILE_MAGIC.len() + 4];
+        let version = u32::from_le_bytes([
+            version_bytes[0],
+            version_bytes[1], 
+            version_bytes[2],
+            version_bytes[3],
+        ]);
+        
+        if version != PACKFILE_VERSION {
+            return Err(CasError::InconsistentState(format!("Unsupported packfile version: {}", version)));
+        }
+        
+        // Read entry count
+        let count_offset = PACKFILE_MAGIC.len() + 4;
+        let count_bytes = &mmap[count_offset..count_offset + 8];
+        let entry_count = u64::from_le_bytes([
+            count_bytes[0], count_bytes[1], count_bytes[2], count_bytes[3],
+            count_bytes[4], count_bytes[5], count_bytes[6], count_bytes[7],
+        ]);
+        
+        // Calculate entry table offset
+        let file_size = mmap.len() as u64;
+        let entry_table_offset = file_size - PACKFILE_FOOTER_SIZE - (entry_count * PACKFILE_ENTRY_SIZE);
+        
+        // Parse entries
+        let mut entries = HashMap::new();
+        let mut total_size = 0u64;
+        let mut offset = entry_table_offset as usize;
+        
+        for _ in 0..entry_count {
+            if offset + PACKFILE_ENTRY_SIZE as usize > mmap.len() {
+                return Err(CasError::InconsistentState("Entry table extends beyond file".to_string()));
+            }
+            
+            // Read hash
+            let hash_bytes: [u8; 32] = mmap[offset..offset + 32]
+                .try_into()
+                .map_err(|_| CasError::InconsistentState("Invalid hash size".to_string()))?;
+            let hash = ContentHash::from_bytes(hash_bytes);
+            offset += 32;
+            
+            // Read offset
+            let offset_bytes = &mmap[offset..offset + 8];
+            let data_offset = u64::from_le_bytes([
+                offset_bytes[0], offset_bytes[1], offset_bytes[2], offset_bytes[3],
+                offset_bytes[4], offset_bytes[5], offset_bytes[6], offset_bytes[7],
+            ]);
+            offset += 8;
+            
+            // Read size
+            let size_bytes = &mmap[offset..offset + 4];
+            let size = u32::from_le_bytes([
+                size_bytes[0], size_bytes[1], size_bytes[2], size_bytes[3],
+            ]);
+            offset += 4;
+            
+            let entry = PackfileEntry::new(hash, data_offset, size);
+            total_size += size as u64;
+            entries.insert(hash, entry);
+        }
+        
+        let stats = PackfileStats {
+            total_packs: 1,
+            total_objects: entries.len(),
+            total_packed_size: total_size,
+        };
+        
+        debug!("Opened memory-mapped packfile {:?} with {} chunks", path, entries.len());
+        
+        Ok(Self {
+            file_path: path.to_path_buf(),
+            entries,
+            stats,
+            mmap,
+        })
+    }
+    
+    /// Read a chunk with zero-copy (returns Bytes)
+    pub fn read_chunk(&self, hash: &ContentHash) -> Result<Bytes> {
+        let entry = self.entries.get(hash)
+            .ok_or_else(|| CasError::ObjectNotFound(*hash))?;
+        
+        let start = entry.offset as usize;
+        let end = start + entry.size as usize;
+        
+        if end > self.mmap.len() {
+            return Err(CasError::CorruptObject(
+                "Chunk data extends beyond packfile".to_string()
+            ));
+        }
+        
+        // Get data slice
+        let data = &self.mmap[start..end];
+        
+        // Verify hash
+        let mut hasher = Hasher::new();
+        hasher.update(data);
+        let actual_hash = ContentHash::from_blake3(hasher.finalize());
+        
+        if actual_hash != *hash {
+            return Err(CasError::HashMismatch {
+                expected: *hash,
+                actual: actual_hash,
+            });
+        }
+        
+        // Return as Bytes (copies data but allows for safe lifetime management)
+        Ok(Bytes::copy_from_slice(data))
+    }
+    
+    /// Get a direct reference to chunk data (zero-copy, no verification)
+    pub fn get_chunk_slice(&self, hash: &ContentHash) -> Result<&[u8]> {
+        let entry = self.entries.get(hash)
+            .ok_or_else(|| CasError::ObjectNotFound(*hash))?;
+        
+        let start = entry.offset as usize;
+        let end = start + entry.size as usize;
+        
+        if end > self.mmap.len() {
+            return Err(CasError::CorruptObject(
+                "Chunk data extends beyond packfile".to_string()
+            ));
+        }
+        
+        Ok(&self.mmap[start..end])
+    }
+    
+    /// Check if the packfile contains a chunk
+    pub fn contains_chunk(&self, hash: &ContentHash) -> bool {
+        self.entries.contains_key(hash)
+    }
+    
+    /// Get packfile statistics
     pub fn stats(&self) -> &PackfileStats {
         &self.stats
     }

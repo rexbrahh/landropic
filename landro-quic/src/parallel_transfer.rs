@@ -251,6 +251,7 @@ impl ParallelTransferManager {
             .map_err(|e| QuicError::Stream(format!("Failed to write message type: {}", e)))?;
         
         // Write chunk size
+        use prost::Message;
         let size = chunk.encoded_len() as u32;
         stream.write_all(&size.to_be_bytes()).await
             .map_err(|e| QuicError::Stream(format!("Failed to write chunk size: {}", e)))?;

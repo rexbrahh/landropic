@@ -27,6 +27,7 @@ toml = "0.8"
 dirs = { workspace = true }
 whoami = "1.5"
 urlencoding = "2.1"
+colored = "2.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

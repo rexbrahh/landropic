@@ -43,29 +43,28 @@ impl ZeroCopyFileReader {
     
     /// Read a chunk at the specified offset using zero-copy techniques
     pub async fn read_chunk(&self, offset: u64, size: usize) -> Result<Bytes> {
-        let mut buffer = BytesMut::with_capacity(size);
-        buffer.resize(size, 0);
-        
         // Use pread for positioned read without seeking
         let file = self.file.clone();
+        let mut temp_buffer = vec![0u8; size];
         let bytes_read = tokio::task::spawn_blocking(move || {
             let std_file = unsafe {
                 // Safety: We're just borrowing the file descriptor for a read operation
                 std::fs::File::from_raw_fd(file.as_raw_fd())
             };
             
-            let result = std_file.read_at(&mut buffer[..], offset);
+            let result = std_file.read_at(&mut temp_buffer[..], offset);
             
             // Prevent the file from being closed when std_file is dropped
             std::mem::forget(std_file);
             
-            result
+            result.map(|n| (n, temp_buffer))
         })
         .await
         .map_err(|e| QuicError::Io(e.into()))?
         .map_err(|e| QuicError::Io(e))?;
         
-        buffer.truncate(bytes_read);
+        let mut buffer = BytesMut::with_capacity(bytes_read.0);
+        buffer.extend_from_slice(&bytes_read.1[..bytes_read.0]);
         Ok(buffer.freeze())
     }
     
@@ -141,20 +140,26 @@ impl ZeroCopyStreamWriter {
             let bytes_read = {
                 let file = file.try_clone().await
                     .map_err(|e| QuicError::Io(e))?;
-                    
-                tokio::task::spawn_blocking(move || {
+                
+                // Create a temporary buffer for the blocking operation
+                let mut temp_buffer = vec![0u8; chunk_size];
+                let bytes = tokio::task::spawn_blocking(move || {
                     use std::os::unix::fs::FileExt;
                     let std_file = unsafe {
                         std::fs::File::from_raw_fd(file.as_raw_fd())
                     };
                     
-                    let result = std_file.read_at(&mut buffer[..], current_offset);
+                    let result = std_file.read_at(&mut temp_buffer[..], current_offset);
                     std::mem::forget(std_file);
-                    result
+                    result.map(|n| (n, temp_buffer))
                 })
                 .await
                 .map_err(|e| QuicError::Io(e.into()))?
-                .map_err(|e| QuicError::Io(e))?
+                .map_err(|e| QuicError::Io(e))?;
+                
+                // Copy data back to our buffer
+                buffer[..bytes.0].copy_from_slice(&bytes.1[..bytes.0]);
+                bytes.0
             };
             
             if bytes_read == 0 {
@@ -344,7 +349,7 @@ mod macos {
     use std::os::unix::io::RawFd;
     
     /// Use sendfile system call for zero-copy file transfer (macOS)
-    pub fn sendfile(fd: RawFd, s: RawFd, offset: i64, len: Option<i64>) -> io::Result<usize> {
+    pub fn sendfile(fd: RawFd, s: RawFd, offset: i64, len: Option<i64>) -> std::io::Result<usize> {
         // This would use the actual sendfile syscall on macOS
         // For now, this is a placeholder
         unimplemented!("sendfile not yet implemented for macOS")
