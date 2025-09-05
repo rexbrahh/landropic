@@ -94,7 +94,10 @@ impl PackfileManager {
         // Load existing packfiles
         manager.load_existing_packs().await?;
 
-        debug!("Packfile manager initialized with {} packs", manager.pack_indexes.len());
+        debug!(
+            "Packfile manager initialized with {} packs",
+            manager.pack_indexes.len()
+        );
         Ok(manager)
     }
 
@@ -106,8 +109,10 @@ impl PackfileManager {
             let path = entry.path();
             if path.extension() == Some(std::ffi::OsStr::new("pack")) {
                 if let Some(pack_name) = path.file_stem() {
-                    let index_path = self.pack_dir.join(format!("{}.idx", pack_name.to_string_lossy()));
-                    
+                    let index_path = self
+                        .pack_dir
+                        .join(format!("{}.idx", pack_name.to_string_lossy()));
+
                     if index_path.exists() {
                         match self.load_pack_index(&path, &index_path).await {
                             Ok(index) => {
@@ -202,7 +207,7 @@ impl PackfileManager {
     /// Read data from a specific packfile entry
     async fn read_from_pack(&self, pack_index: &PackIndex, entry: &PackEntry) -> Result<Bytes> {
         let mut file = fs::File::open(&pack_index.packfile_path).await?;
-        
+
         // Seek to the object's position
         file.seek(SeekFrom::Start(entry.offset)).await?;
 

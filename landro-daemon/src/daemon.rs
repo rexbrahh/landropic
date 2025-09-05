@@ -7,6 +7,12 @@ pub struct Daemon {
     running: Arc<RwLock<bool>>,
 }
 
+impl Default for Daemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Daemon {
     /// Create a new daemon instance
     pub fn new() -> Self {

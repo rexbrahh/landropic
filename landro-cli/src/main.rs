@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing_subscriber;
+use tracing_subscriber::fmt;
 
 #[derive(Parser)]
 #[command(name = "landropic")]
@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
         _ => "trace",
     };
 
-    tracing_subscriber::fmt().with_env_filter(log_level).init();
+    fmt().with_env_filter(log_level).init();
 
     match cli.command {
         Commands::Start { bind } => {

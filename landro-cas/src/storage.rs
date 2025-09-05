@@ -184,11 +184,9 @@ impl ContentStore {
 
         // Check file metadata for basic integrity
         let metadata = fs::metadata(&object_path).await?;
-        
+
         if metadata.len() == 0 {
-            return Err(CasError::CorruptObject(
-                "Object file is empty".to_string(),
-            ));
+            return Err(CasError::CorruptObject("Object file is empty".to_string()));
         }
 
         let data = fs::read(&object_path).await?;
@@ -281,34 +279,34 @@ impl ContentStore {
     /// Statistics including object count and total size
     pub async fn stats(&self) -> Result<StorageStats> {
         let objects_dir = self.root_path.join("objects");
-        
+
         if !objects_dir.exists() {
             return Ok(StorageStats {
                 object_count: 0,
                 total_size: 0,
             });
         }
-        
+
         let mut object_count = 0u64;
         let mut total_size = 0u64;
-        
+
         // Walk through all shard directories
         let mut dir_entries = fs::read_dir(&objects_dir).await?;
-        
+
         while let Some(shard1_entry) = dir_entries.next_entry().await? {
             if !shard1_entry.file_type().await?.is_dir() {
                 continue;
             }
-            
+
             let mut shard1_entries = fs::read_dir(shard1_entry.path()).await?;
-            
+
             while let Some(shard2_entry) = shard1_entries.next_entry().await? {
                 if !shard2_entry.file_type().await?.is_dir() {
                     continue;
                 }
-                
+
                 let mut object_entries = fs::read_dir(shard2_entry.path()).await?;
-                
+
                 while let Some(object_entry) = object_entries.next_entry().await? {
                     if object_entry.file_type().await?.is_file() {
                         let metadata = object_entry.metadata().await?;
@@ -318,9 +316,12 @@ impl ContentStore {
                 }
             }
         }
-        
-        debug!("Storage stats: {} objects, {} bytes", object_count, total_size);
-        
+
+        debug!(
+            "Storage stats: {} objects, {} bytes",
+            object_count, total_size
+        );
+
         Ok(StorageStats {
             object_count,
             total_size,
@@ -342,40 +343,40 @@ impl ContentStore {
     /// every object. Use sparingly or run during maintenance windows.
     pub async fn verify_integrity(&self) -> Result<VerificationReport> {
         let objects_dir = self.root_path.join("objects");
-        
+
         if !objects_dir.exists() {
             return Ok(VerificationReport::empty());
         }
-        
+
         let mut report = VerificationReport::new();
         let mut dir_entries = fs::read_dir(&objects_dir).await?;
-        
+
         while let Some(shard1_entry) = dir_entries.next_entry().await? {
             if !shard1_entry.file_type().await?.is_dir() {
                 continue;
             }
-            
+
             let mut shard1_entries = fs::read_dir(shard1_entry.path()).await?;
-            
+
             while let Some(shard2_entry) = shard1_entries.next_entry().await? {
                 if !shard2_entry.file_type().await?.is_dir() {
                     continue;
                 }
-                
+
                 let mut object_entries = fs::read_dir(shard2_entry.path()).await?;
-                
+
                 while let Some(object_entry) = object_entries.next_entry().await? {
                     if object_entry.file_type().await?.is_file() {
                         let file_name = object_entry.file_name();
                         let file_name_str = file_name.to_string_lossy();
-                        
+
                         // Reconstruct the full hash from the directory structure
                         let shard1_name = shard1_entry.file_name();
                         let shard2_name = shard2_entry.file_name();
                         let shard1 = shard1_name.to_string_lossy();
                         let shard2 = shard2_name.to_string_lossy();
                         let full_hash = format!("{}{}{}", shard1, shard2, file_name_str);
-                        
+
                         match ContentHash::from_hex(&full_hash) {
                             Ok(expected_hash) => {
                                 match self.verify_single_object(&expected_hash).await {
@@ -395,13 +396,13 @@ impl ContentStore {
                                 report.error_count += 1;
                             }
                         }
-                        
+
                         report.total_objects += 1;
                     }
                 }
             }
         }
-        
+
         debug!("Integrity verification completed: {:?}", report);
         Ok(report)
     }
@@ -523,7 +524,7 @@ mod tests {
         // Add some objects
         let data1 = b"Hello, World!";
         let data2 = b"This is test data for the content store";
-        
+
         store.write(data1).await.unwrap();
         store.write(data2).await.unwrap();
 
@@ -562,7 +563,7 @@ mod tests {
         // Add some objects
         let data1 = b"Test data for verification";
         let data2 = b"More test data";
-        
+
         store.write(data1).await.unwrap();
         store.write(data2).await.unwrap();
 

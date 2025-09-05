@@ -55,34 +55,22 @@ impl Connection {
 
     /// Open a bidirectional stream
     pub async fn open_bi(&self) -> Result<(SendStream, RecvStream)> {
-        self.inner
-            .open_bi()
-            .await
-            .map_err(QuicError::Connection)
+        self.inner.open_bi().await.map_err(QuicError::Connection)
     }
 
     /// Open a unidirectional stream
     pub async fn open_uni(&self) -> Result<SendStream> {
-        self.inner
-            .open_uni()
-            .await
-            .map_err(QuicError::Connection)
+        self.inner.open_uni().await.map_err(QuicError::Connection)
     }
 
     /// Accept a bidirectional stream
     pub async fn accept_bi(&self) -> Result<(SendStream, RecvStream)> {
-        self.inner
-            .accept_bi()
-            .await
-            .map_err(QuicError::Connection)
+        self.inner.accept_bi().await.map_err(QuicError::Connection)
     }
 
     /// Accept a unidirectional stream
     pub async fn accept_uni(&self) -> Result<RecvStream> {
-        self.inner
-            .accept_uni()
-            .await
-            .map_err(QuicError::Connection)
+        self.inner.accept_uni().await.map_err(QuicError::Connection)
     }
 
     /// Send handshake message

@@ -5,6 +5,28 @@
 default:
     @just --list
 
+# CI/CD simulation commands
+
+# Run all quality checks locally (matches CI pipeline)
+ci-check:
+    @echo "🚀 Running CI quality checks locally..."
+    @echo "🔧 Step 1: Auto-fixing formatting..."
+    cargo fmt --all
+    @echo "🔍 Step 2: Checking formatting..."
+    cargo fmt --all -- --check
+    @echo "🔍 Step 3: Running Clippy analysis..."
+    cargo clippy --workspace --all-targets -- -D warnings
+    @echo "🧪 Step 4: Running fast tests..."
+    cargo test --workspace --profile test-fast
+    @echo "✅ All CI checks passed locally!"
+
+# Auto-fix code quality issues
+fix:
+    @echo "🔧 Auto-fixing code quality issues..."
+    cargo fmt --all
+    cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged
+    @echo "✅ Auto-fix completed!"
+
 # Development builds (fast)
 build-dev:
     cargo build --profile dev-fast

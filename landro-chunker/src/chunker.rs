@@ -84,6 +84,12 @@ pub struct Chunker {
     gear_table: [u64; 256],
 }
 
+impl Default for Chunker {
+    fn default() -> Self {
+        Self::new(ChunkerConfig::default()).unwrap()
+    }
+}
+
 impl Chunker {
     /// Create a new chunker with configuration
     pub fn new(config: ChunkerConfig) -> Result<Self> {
@@ -100,11 +106,6 @@ impl Chunker {
             mask,
             gear_table,
         })
-    }
-
-    /// Create a chunker with default configuration
-    pub fn default() -> Self {
-        Self::new(ChunkerConfig::default()).unwrap()
     }
 
     /// Chunk data from an async reader.
@@ -124,65 +125,69 @@ impl Chunker {
         R: tokio::io::AsyncRead + Unpin,
     {
         use tokio::io::AsyncReadExt;
-        
+
         trace!("Starting stream chunking with config: {:?}", self.config);
-        
+
         let mut chunks = Vec::new();
         let global_offset = 0u64;
         let mut buffer = Vec::new();
         let mut read_buffer = vec![0u8; 64 * 1024]; // 64KB read buffer
-        
+
         // Read the entire stream into memory in chunks
         loop {
             let bytes_read = reader.read(&mut read_buffer).await?;
-            
+
             if bytes_read == 0 {
                 break; // End of stream
             }
-            
+
             buffer.extend_from_slice(&read_buffer[..bytes_read]);
         }
-        
+
         if buffer.is_empty() {
             return Ok(chunks);
         }
-        
+
         // Process the complete buffer using our existing chunking logic
         let mut offset = 0usize;
         let buffer_len = buffer.len();
-        
+
         while offset < buffer_len {
             let chunk_start = offset;
             let remaining = buffer_len - chunk_start;
-            
+
             // Enforce minimum chunk size
             let mut chunk_end = chunk_start + self.config.min_size.min(remaining);
-            
+
             // If we have more data and we're past min size, look for optimal cut point
             if chunk_end < buffer_len && remaining > self.config.min_size {
                 let max_scan = (chunk_start + self.config.max_size).min(buffer_len);
                 chunk_end = self.find_chunk_boundary(&buffer, chunk_end, max_scan);
             }
-            
+
             // Ensure we don't exceed bounds
             chunk_end = chunk_end.min(buffer_len);
-            
+
             // Create chunk
             let chunk_data = &buffer[chunk_start..chunk_end];
             let mut hasher = Hasher::new();
             hasher.update(chunk_data);
             let hash = ChunkHash::from_blake3(hasher.finalize());
-            
+
             chunks.push(Chunk {
                 data: Bytes::copy_from_slice(chunk_data),
                 hash,
                 offset: global_offset + (chunk_start as u64),
             });
-            
+
             offset = chunk_end;
         }
-        
-        trace!("Stream chunking completed: {} bytes into {} chunks", buffer_len, chunks.len());
+
+        trace!(
+            "Stream chunking completed: {} bytes into {} chunks",
+            buffer_len,
+            chunks.len()
+        );
         Ok(chunks)
     }
 
@@ -244,28 +249,28 @@ impl Chunker {
         let window_size = 48;
         let mut hash = 0u64;
         let mut pos = start_pos;
-        
+
         // Initialize hash for first window
         let window_end = (pos + window_size).min(data.len()).min(max_pos);
-        for i in pos..window_end {
-            hash = (hash << 1).wrapping_add(self.gear_table[data[i] as usize]);
+        for &byte in data.iter().take(window_end).skip(pos) {
+            hash = (hash << 1).wrapping_add(self.gear_table[byte as usize]);
         }
-        
+
         pos = window_end;
-        
+
         // Scan for boundary
         while pos < max_pos && pos < data.len() {
             // Update rolling hash
             hash = (hash << 1).wrapping_add(self.gear_table[data[pos] as usize]);
-            
+
             // Check if we found a boundary
             if (hash & self.mask) == 0 {
                 return pos + 1;
             }
-            
+
             pos += 1;
         }
-        
+
         // If no boundary found, return max position
         max_pos.min(data.len())
     }
@@ -278,10 +283,10 @@ impl Chunker {
         let mut table = [0u64; 256];
         let mut seed = 0x3DAE66B0C5E15E79u64; // Arbitrary seed for deterministic results
 
-        for i in 0..256 {
+        for entry in &mut table {
             // Simple pseudo-random generation using linear congruential generator
             seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-            table[i] = seed;
+            *entry = seed;
         }
 
         table
@@ -323,14 +328,14 @@ mod tests {
 
         let chunks = chunker.chunk_stream(cursor).await.unwrap();
         assert!(!chunks.is_empty());
-        
+
         // Verify that chunks contain the expected data
         let total_size: usize = chunks.iter().map(|c| c.data.len()).sum();
         assert_eq!(total_size, data.len());
-        
+
         // Verify chunks are properly ordered by offset
         for i in 1..chunks.len() {
-            assert!(chunks[i].offset > chunks[i-1].offset);
+            assert!(chunks[i].offset > chunks[i - 1].offset);
         }
     }
 }

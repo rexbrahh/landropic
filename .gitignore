@@ -59,6 +59,7 @@ sccache/
 # Logs
 *.log
 logs/
+logs_*/
 /log/
 
 # Temporary files

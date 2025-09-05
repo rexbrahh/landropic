@@ -4,6 +4,12 @@ use tracing::info;
 /// File system watcher
 pub struct Watcher;
 
+impl Default for Watcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Watcher {
     /// Create new watcher
     pub fn new() -> Self {

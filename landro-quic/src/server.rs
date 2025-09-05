@@ -154,9 +154,7 @@ impl QuicServer {
 
     /// Get bind address
     pub fn local_addr(&self) -> Option<SocketAddr> {
-        self.endpoint
-            .as_ref()
-            .and_then(|e| e.local_addr().ok())
+        self.endpoint.as_ref().and_then(|e| e.local_addr().ok())
     }
 }
 

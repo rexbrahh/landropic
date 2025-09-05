@@ -35,10 +35,29 @@ jobs:
         uses: Swatinem/rust-cache@v2
       
       # Code Quality checks (Agent 5 automation)
-      - name: Format check
-        run: cargo fmt --all -- --check
-      - name: Clippy analysis
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Format check with detailed diff
+        run: |
+          echo "🔍 Checking code formatting..."
+          if ! cargo fmt --all -- --check; then
+            echo "❌ Code formatting issues found!"
+            echo "📝 Run 'cargo fmt --all' locally to fix these issues:"
+            echo ""
+            cargo fmt --all -- --check --verbose 2>&1 || true
+            echo ""
+            echo "💡 Expected formatting differences shown above"
+            exit 1
+          fi
+          echo "✅ Code formatting is correct"
+          
+      - name: Clippy analysis with detailed output
+        run: |
+          echo "🔍 Running Clippy analysis..."
+          cargo clippy --workspace --all-targets -- -D warnings \
+            -W clippy::cargo \
+            -W clippy::nursery \
+            -W clippy::pedantic \
+            -A clippy::module_name_repetitions \
+            -A clippy::missing_errors_doc
       
       # Fast development profile tests
       - name: Fast tests (dev profile)
@@ -73,10 +92,17 @@ jobs:
       - name: Cross-crate integration testing
         run: |
           echo "🔗 Running integration test matrix..."
+          set -e  # Exit on first error
           for crate in landro-proto landro-crypto landro-quic landro-chunker landro-cas landro-index landro-daemon landro-cli; do
-            echo "Testing $crate integration..."
-            cargo test -p "$crate" --profile test-fast --test '*' || true
+            echo "🧪 Testing $crate integration..."
+            if cargo test -p "$crate" --profile test-fast --tests --lib; then
+              echo "✅ $crate tests passed"
+            else
+              echo "❌ $crate tests failed"
+              exit 1
+            fi
           done
+          echo "✅ All integration tests passed!"
       
       # Security audit (Agent 4 responsibility)
       - name: Security audit
@@ -113,13 +139,24 @@ jobs:
         uses: Swatinem/rust-cache@v2
       
       # Automated quality improvements
-      - name: Auto-fix formatting
+      - name: Auto-fix formatting and validate
         run: |
+          echo "🔧 Auto-fixing formatting..."
           cargo fmt --all
+          echo "✅ Formatting applied"
+          
+          echo "🔍 Verifying format consistency..."
+          if cargo fmt --all -- --check; then
+            echo "✅ Code formatting is consistent"
+          else
+            echo "⚠️  Format inconsistencies remain after auto-fix"
+          fi
           
       - name: Auto-fix clippy warnings
         run: |
-          cargo clippy --workspace --all-targets --fix --allow-dirty || true
+          echo "🔧 Auto-fixing clippy warnings..."
+          cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged || true
+          echo "✅ Clippy auto-fix completed"
           
       - name: Dependency analysis
         run: |

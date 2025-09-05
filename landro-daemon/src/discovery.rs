@@ -3,6 +3,12 @@ use tracing::info;
 /// mDNS service discovery
 pub struct Discovery;
 
+impl Default for Discovery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Discovery {
     /// Create new discovery service
     pub fn new() -> Self {
