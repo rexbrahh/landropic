@@ -85,12 +85,12 @@ impl QuicServer {
 
         let connection = Connection::new(quinn_conn);
 
-        // Perform handshake
+        // Perform server-side handshake
         let device_id = self.identity.device_id();
         let device_name = self.identity.device_name();
 
         match connection
-            .handshake(device_id.as_bytes(), device_name)
+            .server_handshake(device_id.as_bytes(), device_name)
             .await
         {
             Ok(()) => {

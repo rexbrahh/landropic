@@ -1434,9 +1434,12 @@ dependencies = [
 name = "landro-index"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "chrono",
+ "hex",
  "landro-cas",
  "landro-chunker",
+ "notify",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1450,10 +1453,13 @@ dependencies = [
 name = "landro-proto"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "prost",
  "prost-build",
  "prost-types",
  "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1474,6 +1480,24 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "landropic"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "landro-cas",
+ "landro-chunker",
+ "landro-crypto",
+ "landro-index",
+ "landro-proto",
+ "landro-quic",
+ "prost-types",
+ "rustls",
+ "tempfile",
+ "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -1,9 +1,11 @@
 use quinn::{Connection as QuinnConnection, RecvStream, SendStream};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 use tracing::{debug, info};
 
-use landro_proto::{Hello, PROTOCOL_VERSION};
+use landro_proto::{Hello, VersionNegotiator, PROTOCOL_VERSION};
 use prost::Message;
 
 use crate::errors::{QuicError, Result};
@@ -160,12 +162,22 @@ impl Connection {
         let hello = Hello::decode(&buf[..])
             .map_err(|e| QuicError::Protocol(format!("Failed to decode hello: {}", e)))?;
 
-        // Verify protocol version
-        if hello.version != PROTOCOL_VERSION {
-            return Err(QuicError::Protocol(format!(
-                "Protocol version mismatch: expected {}, got {}",
-                PROTOCOL_VERSION, hello.version
+        // Verify protocol version compatibility
+        if !VersionNegotiator::is_compatible(&hello.version) {
+            return Err(QuicError::version_mismatch(VersionNegotiator::compatibility_error(&hello.version)));
+        }
+
+        // Validate device ID format
+        if hello.device_id.len() != 32 {
+            return Err(QuicError::handshake_failed(format!(
+                "Invalid device ID length: expected 32 bytes, got {}",
+                hello.device_id.len()
             )));
+        }
+
+        // Validate device name is not empty
+        if hello.device_name.trim().is_empty() {
+            return Err(QuicError::handshake_failed("Device name cannot be empty"));
         }
 
         // Store remote device information
@@ -191,16 +203,76 @@ impl Connection {
         self.remote_device_name.lock().await.clone()
     }
 
-    /// Perform mutual handshake
+    /// Perform client-side handshake (send hello, then receive response)
+    pub async fn client_handshake(&self, device_id: &[u8], device_name: &str) -> Result<()> {
+        self.client_handshake_with_timeout(device_id, device_name, Duration::from_secs(10)).await
+    }
+
+    /// Perform client-side handshake with custom timeout
+    pub async fn client_handshake_with_timeout(
+        &self,
+        device_id: &[u8],
+        device_name: &str,
+        handshake_timeout: Duration,
+    ) -> Result<()> {
+        let timeout_secs = handshake_timeout.as_secs();
+        let handshake_future = async {
+            // Client: Send our hello first
+            self.send_hello(device_id, device_name).await.map_err(|e| {
+                QuicError::handshake_failed(format!("Failed to send hello: {}", e))
+            })?;
+
+            // Client: Receive server's hello response
+            self.receive_hello().await.map_err(|e| {
+                QuicError::handshake_failed(format!("Failed to receive server hello: {}", e))
+            })?;
+
+            debug!("Client handshake completed with {}", self.remote_address());
+            Ok(())
+        };
+
+        timeout(handshake_timeout, handshake_future)
+            .await
+            .map_err(|_| QuicError::HandshakeTimeout { timeout_secs })?
+    }
+
+    /// Perform server-side handshake (receive hello, then send response)
+    pub async fn server_handshake(&self, device_id: &[u8], device_name: &str) -> Result<()> {
+        self.server_handshake_with_timeout(device_id, device_name, Duration::from_secs(10)).await
+    }
+
+    /// Perform server-side handshake with custom timeout
+    pub async fn server_handshake_with_timeout(
+        &self,
+        device_id: &[u8],
+        device_name: &str,
+        handshake_timeout: Duration,
+    ) -> Result<()> {
+        let timeout_secs = handshake_timeout.as_secs();
+        let handshake_future = async {
+            // Server: Receive client's hello first
+            self.receive_hello().await.map_err(|e| {
+                QuicError::handshake_failed(format!("Failed to receive client hello: {}", e))
+            })?;
+
+            // Server: Send our hello response
+            self.send_hello(device_id, device_name).await.map_err(|e| {
+                QuicError::handshake_failed(format!("Failed to send hello response: {}", e))
+            })?;
+
+            debug!("Server handshake completed with {}", self.remote_address());
+            Ok(())
+        };
+
+        timeout(handshake_timeout, handshake_future)
+            .await
+            .map_err(|_| QuicError::HandshakeTimeout { timeout_secs })?
+    }
+
+    /// Perform mutual handshake (deprecated - use client_handshake or server_handshake)
     pub async fn handshake(&self, device_id: &[u8], device_name: &str) -> Result<()> {
-        // Send our hello
-        self.send_hello(device_id, device_name).await?;
-
-        // Receive their hello
-        self.receive_hello().await?;
-
-        debug!("Handshake completed with {}", self.remote_address());
-        Ok(())
+        // Default to client behavior for backward compatibility
+        self.client_handshake(device_id, device_name).await
     }
 }
 

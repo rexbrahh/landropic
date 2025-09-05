@@ -23,6 +23,18 @@ pub enum QuicError {
     #[error("Timeout")]
     Timeout,
 
+    #[error("Handshake timeout after {timeout_secs} seconds")]
+    HandshakeTimeout { timeout_secs: u64 },
+
+    #[error("Handshake failed: {reason}")]
+    HandshakeFailed { reason: String },
+
+    #[error("Version negotiation failed: {details}")]
+    VersionMismatch { details: String },
+
+    #[error("Authentication failed: {reason}")]
+    AuthenticationFailed { reason: String },
+
     #[error("Server already running")]
     ServerAlreadyRunning,
 
@@ -30,4 +42,82 @@ pub enum QuicError {
     Crypto(#[from] landro_crypto::CryptoError),
 }
 
+impl QuicError {
+    /// Create a handshake failure error with context
+    pub fn handshake_failed(reason: impl Into<String>) -> Self {
+        Self::HandshakeFailed {
+            reason: reason.into(),
+        }
+    }
+
+    /// Create a version mismatch error with details
+    pub fn version_mismatch(details: impl Into<String>) -> Self {
+        Self::VersionMismatch {
+            details: details.into(),
+        }
+    }
+
+    /// Create an authentication failure error
+    pub fn authentication_failed(reason: impl Into<String>) -> Self {
+        Self::AuthenticationFailed {
+            reason: reason.into(),
+        }
+    }
+
+    /// Check if this error is recoverable (could retry)
+    pub fn is_recoverable(&self) -> bool {
+        match self {
+            QuicError::Timeout | QuicError::HandshakeTimeout { .. } => true,
+            QuicError::Io(_) => true,
+            QuicError::Connect(_) => true,
+            QuicError::Connection(_) => false, // Usually permanent
+            QuicError::VersionMismatch { .. } => false, // Incompatible versions
+            QuicError::AuthenticationFailed { .. } => false, // Auth issues are permanent
+            QuicError::HandshakeFailed { .. } => false, // Protocol issues usually permanent
+            _ => false,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, QuicError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_types() {
+        let handshake_err = QuicError::handshake_failed("Protocol mismatch");
+        assert!(matches!(handshake_err, QuicError::HandshakeFailed { .. }));
+        assert!(!handshake_err.is_recoverable());
+
+        let version_err = QuicError::version_mismatch("Version 2.0.0 not compatible");
+        assert!(matches!(version_err, QuicError::VersionMismatch { .. }));
+        assert!(!version_err.is_recoverable());
+
+        let auth_err = QuicError::authentication_failed("Invalid certificate");
+        assert!(matches!(auth_err, QuicError::AuthenticationFailed { .. }));
+        assert!(!auth_err.is_recoverable());
+    }
+
+    #[test]
+    fn test_recoverable_errors() {
+        let timeout_err = QuicError::HandshakeTimeout { timeout_secs: 10 };
+        assert!(timeout_err.is_recoverable());
+
+        let io_err = QuicError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "test"));
+        assert!(io_err.is_recoverable());
+
+        let version_err = QuicError::version_mismatch("incompatible");
+        assert!(!version_err.is_recoverable());
+    }
+
+    #[test]
+    fn test_error_messages() {
+        let handshake_err = QuicError::handshake_failed("test reason");
+        assert_eq!(handshake_err.to_string(), "Handshake failed: test reason");
+
+        let timeout_err = QuicError::HandshakeTimeout { timeout_secs: 15 };
+        assert_eq!(timeout_err.to_string(), "Handshake timeout after 15 seconds");
+    }
+}

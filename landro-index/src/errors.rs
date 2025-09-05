@@ -22,6 +22,18 @@ pub enum IndexError {
 
     #[error("Schema version mismatch: expected {expected}, got {actual}")]
     SchemaVersionMismatch { expected: u32, actual: u32 },
+
+    #[error("Chunker error: {0}")]
+    ChunkerError(String),
+
+    #[error("Storage error: {0}")]
+    StorageError(String),
+
+    #[error("Invalid file type: {0}")]
+    InvalidFileType(std::path::PathBuf),
+
+    #[error("Watcher error: {0}")]
+    WatcherError(String),
 }
 
 pub type Result<T> = std::result::Result<T, IndexError>;

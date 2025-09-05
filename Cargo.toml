@@ -1,3 +1,30 @@
+[package]
+name = "landropic"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Integration package dependencies
+[dependencies]
+landro-crypto = { path = "landro-crypto" }
+landro-quic = { path = "landro-quic" }
+landro-proto = { path = "landro-proto" }
+landro-cas = { path = "landro-cas" }
+landro-index = { path = "landro-index" }
+landro-chunker = { path = "landro-chunker" }
+
+# Integration test dependencies
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "time"] }
+tracing-subscriber = { workspace = true }
+tempfile = { workspace = true }
+chrono = { workspace = true }
+rustls = { workspace = true }
+prost-types = { workspace = true }
+
 [workspace]
 members = [
     "landro-proto",

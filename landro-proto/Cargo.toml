@@ -9,6 +9,9 @@ license.workspace = true
 prost = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true, optional = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+hex = { workspace = true }
 
 [build-dependencies]
 prost-build = "0.13"

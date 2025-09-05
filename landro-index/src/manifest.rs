@@ -39,12 +39,47 @@ impl Manifest {
     pub fn add_file(&mut self, entry: ManifestEntry) {
         self.files.push(entry);
     }
+    
+    /// Finalize the manifest by calculating its hash
+    pub fn finalize(&mut self) {
+        let hash = self.calculate_hash();
+        self.manifest_hash = Some(hash.to_hex());
+    }
 
     /// Calculate manifest hash
     pub fn calculate_hash(&self) -> ContentHash {
-        // TODO: Implement proper manifest hashing
-        // For now, return a placeholder
-        ContentHash::from_bytes([0u8; 32])
+        use blake3::Hasher;
+        
+        // Create deterministic representation for hashing
+        let mut hasher = Hasher::new();
+        
+        // Hash folder metadata
+        hasher.update(self.folder_id.as_bytes());
+        hasher.update(&self.version.to_le_bytes());
+        hasher.update(self.created_at.to_rfc3339().as_bytes());
+        
+        // Sort files by path for deterministic ordering
+        let mut sorted_files = self.files.clone();
+        sorted_files.sort_by(|a, b| a.path.cmp(&b.path));
+        
+        // Hash each file entry deterministically
+        for file in &sorted_files {
+            hasher.update(file.path.as_bytes());
+            hasher.update(&file.size.to_le_bytes());
+            hasher.update(file.modified_at.to_rfc3339().as_bytes());
+            hasher.update(file.content_hash.as_bytes());
+            
+            if let Some(mode) = file.mode {
+                hasher.update(&mode.to_le_bytes());
+            }
+            
+            // Hash chunk hashes in order
+            for chunk_hash in &file.chunk_hashes {
+                hasher.update(chunk_hash.as_bytes());
+            }
+        }
+        
+        ContentHash::from_blake3(hasher.finalize())
     }
 
     /// Get total size of all files

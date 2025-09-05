@@ -191,6 +191,18 @@ impl IndexDatabase {
         Ok(id)
     }
 
+    /// Get the latest manifest version for a folder
+    pub fn get_latest_manifest_version(&self, folder_id: &str) -> Option<u64> {
+        self.conn
+            .query_row(
+                "SELECT MAX(version) FROM manifests WHERE folder_id = ?1",
+                params![folder_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten()
+    }
+
     /// Save a manifest
     pub fn save_manifest(&mut self, manifest: &Manifest) -> Result<i64> {
         let tx = self.begin_transaction()?;
