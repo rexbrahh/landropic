@@ -21,7 +21,7 @@ use tracing::{error, info, warn};
 
 // Import landropic crates
 use landro_cas::ContentStore;
-use landro_chunker::{Chunker, ChunkerConfig};
+use landro_chunker::{Chunker, ChunkerConfig, ContentHash};
 use landro_crypto::{CertificateVerifier, DeviceIdentity};
 use landro_index::{async_indexer::AsyncIndexer, IndexerConfig};
 use landro_quic::{QuicClient, QuicConfig, QuicServer};
@@ -605,7 +605,7 @@ async fn test_data_integrity() {
         node.create_file(name, content).await.expect("Failed to create test file");
         
         // Use Blake3 to compute content hash (same as landropic uses)
-        let hash = blake3::hash(content);
+        let hash = ContentHash::from_blake3(blake3::hash(content));
         original_hashes.insert(name.to_string(), hash);
         
         info!("Created {} with hash: {}", name, hash.to_hex());
@@ -617,7 +617,7 @@ async fn test_data_integrity() {
         assert_eq!(read_content, *expected_content, "File content should match after storage");
         
         // Verify hash
-        let computed_hash = blake3::hash(&read_content);
+        let computed_hash = ContentHash::from_blake3(blake3::hash(&read_content));
         let expected_hash = original_hashes.get(*name).unwrap();
         assert_eq!(computed_hash, *expected_hash, "Hash should match for {}", name);
     }
@@ -631,8 +631,8 @@ async fn test_data_integrity() {
             let mut reconstructed = Vec::new();
             for chunk in &chunks {
                 // Verify each chunk hash
-                let computed_hash = blake3::hash(&chunk.data);
-                assert_eq!(computed_hash.as_bytes(), &chunk.hash[..], "Chunk hash should match");
+                let computed_hash = ContentHash::from_blake3(blake3::hash(&chunk.data));
+                assert_eq!(computed_hash.as_bytes(), chunk.hash.as_bytes(), "Chunk hash should match");
                 
                 reconstructed.extend_from_slice(&chunk.data);
             }

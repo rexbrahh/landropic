@@ -1879,6 +1879,7 @@ dependencies = [
 name = "landro-daemon"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "futures",
  "gethostname",
  "hex",
@@ -2003,7 +2004,9 @@ dependencies = [
 name = "landropic"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "chrono",
+ "hex",
  "landro-cas",
  "landro-chunker",
  "landro-crypto",
@@ -2014,6 +2017,7 @@ dependencies = [
  "rustls",
  "tempfile",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

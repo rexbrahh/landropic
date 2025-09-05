@@ -737,7 +737,13 @@ mod tests {
         
         // Create test components
         let store = Arc::new(ContentStore::open(&storage_path.join("cas")).await.unwrap());
-        let chunker = Arc::new(Chunker::new(64 * 1024)); // 64KB average chunk
+        let chunker_config = landro_chunker::ChunkerConfig {
+            min_size: 16 * 1024,
+            avg_size: 64 * 1024,
+            max_size: 256 * 1024,
+            mask_bits: 16,
+        };
+        let chunker = Arc::new(Chunker::new(chunker_config).unwrap());
         let indexer = Arc::new(
             AsyncIndexer::new(
                 &storage_path.join("cas"),
@@ -772,7 +778,13 @@ mod tests {
         
         // Create test components
         let store = Arc::new(ContentStore::open(&storage_path.join("cas")).await.unwrap());
-        let chunker = Arc::new(Chunker::new(64 * 1024));
+        let chunker_config = landro_chunker::ChunkerConfig {
+            min_size: 16 * 1024,
+            avg_size: 64 * 1024,
+            max_size: 256 * 1024,
+            mask_bits: 16,
+        };
+        let chunker = Arc::new(Chunker::new(chunker_config).unwrap());
         let indexer = Arc::new(
             AsyncIndexer::new(
                 &storage_path.join("cas"),
