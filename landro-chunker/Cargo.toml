@@ -21,6 +21,10 @@ serde = ["dep:serde"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["test-util", "macros", "fs"] }
+tokio = { workspace = true, features = ["test-util", "macros", "fs", "rt"] }
 proptest = { workspace = true }
 criterion = { workspace = true }
+
+[[bench]]
+name = "chunker_bench"
+harness = false

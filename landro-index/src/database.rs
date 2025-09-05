@@ -115,13 +115,13 @@ impl IndexDatabase {
 
         let id = tx.query_row(
             r#"
-            INSERT INTO files (path, size, modified_at, content_hash, mode)
+            INSERT INTO files (path, size, modified_at, content_hash, permissions)
             VALUES (?1, ?2, ?3, ?4, ?5)
             ON CONFLICT(path) DO UPDATE SET
                 size = excluded.size,
                 modified_at = excluded.modified_at,
                 content_hash = excluded.content_hash,
-                mode = excluded.mode,
+                permissions = excluded.permissions,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id
             "#,
@@ -142,7 +142,7 @@ impl IndexDatabase {
     /// Get a file by path
     pub fn get_file_by_path(&self, path: &str) -> Result<Option<FileEntry>> {
         let result = self.conn.query_row(
-            "SELECT id, path, size, modified_at, content_hash, mode FROM files WHERE path = ?1",
+            "SELECT id, path, size, modified_at, content_hash, permissions FROM files WHERE path = ?1",
             params![path],
             |row| {
                 Ok(FileEntry {

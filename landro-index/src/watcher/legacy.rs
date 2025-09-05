@@ -12,8 +12,8 @@ use crate::indexer::FileIndexer;
 
 // Re-export platform watcher types for backward compatibility
 pub use crate::watcher::{
-    create_platform_watcher, EventDebouncer, EventKind, FsEvent, PlatformFlags, PlatformWatcher,
-    WatcherCapabilities, WatcherConfig, WatcherStats, should_ignore_path,
+    create_platform_watcher, should_ignore_path, EventDebouncer, EventKind, FsEvent, PlatformFlags,
+    PlatformWatcher, WatcherCapabilities, WatcherConfig, WatcherStats,
 };
 
 // Legacy FsEvent enum for backward compatibility
@@ -80,8 +80,10 @@ impl FolderWatcher {
             Box::new(crate::watcher::fallback::FallbackWatcher::new().await?)
         };
 
-        info!("Created folder watcher with capabilities: {:?}", 
-              platform_watcher.capabilities());
+        info!(
+            "Created folder watcher with capabilities: {:?}",
+            platform_watcher.capabilities()
+        );
 
         Ok(Self {
             platform_watcher,
@@ -131,9 +133,7 @@ impl FolderWatcher {
         info!("Stopping watch on folder: {:?}", canonical_path);
 
         // Remove from platform watcher
-        self.platform_watcher
-            .unwatch(&canonical_path)
-            .await?;
+        self.platform_watcher.unwatch(&canonical_path).await?;
 
         // Remove from tracking
         self.watched_folders.write().await.remove(&canonical_path);
@@ -154,7 +154,7 @@ impl FolderWatcher {
                 _ = interval.tick() => {
                     // Poll for new events from platform watcher
                     let new_events = self.platform_watcher.poll_events().await?;
-                    
+
                     // Filter and debounce events
                     for event in new_events {
                         if !self.should_ignore_event(&event).await {
@@ -184,10 +184,7 @@ impl FolderWatcher {
     }
 
     /// Start the watcher with automatic re-indexing
-    pub async fn start_with_indexer(
-        mut self,
-        indexer: Arc<RwLock<FileIndexer>>,
-    ) -> Result<()> {
+    pub async fn start_with_indexer(mut self, indexer: Arc<RwLock<FileIndexer>>) -> Result<()> {
         info!("Starting enhanced folder watcher with automatic indexing");
 
         let watched_folders = self.watched_folders.clone();
@@ -207,7 +204,7 @@ impl FolderWatcher {
                 }
             }
         });
-        
+
         // Process events and forward them to the channel
         self.process_events(move |events| {
             for event in events {
@@ -235,7 +232,7 @@ impl FolderWatcher {
         if let Some((folder_path, folder_id)) = folder_entry {
             debug!(
                 "Event {:?} ({:?}) in folder {} ({}) - file_id: {:?}",
-                event.kind, 
+                event.kind,
                 path,
                 folder_id,
                 folder_path.display(),
@@ -328,7 +325,7 @@ mod tests {
             timestamp: SystemTime::now(),
             flags: PlatformFlags::default(),
         };
-        
+
         debouncer.add_event(event);
 
         // No events ready immediately
@@ -372,9 +369,15 @@ mod tests {
     fn test_glob_matching() {
         use crate::watcher::should_ignore_path;
         let patterns = vec!["*.tmp".to_string()];
-        
-        assert!(should_ignore_path(&PathBuf::from("/test/file.tmp"), &patterns));
-        assert!(!should_ignore_path(&PathBuf::from("/test/file.txt"), &patterns));
+
+        assert!(should_ignore_path(
+            &PathBuf::from("/test/file.tmp"),
+            &patterns
+        ));
+        assert!(!should_ignore_path(
+            &PathBuf::from("/test/file.txt"),
+            &patterns
+        ));
     }
 
     #[tokio::test]
@@ -426,9 +429,11 @@ mod tests {
         let watcher = FolderWatcher::new(config).await.unwrap();
 
         let capabilities = watcher.capabilities().await;
-        
+
         // All platforms should support basic functionality
-        assert!(capabilities.max_path_length.is_none() || capabilities.max_path_length.unwrap() > 100);
+        assert!(
+            capabilities.max_path_length.is_none() || capabilities.max_path_length.unwrap() > 100
+        );
     }
 
     #[tokio::test]

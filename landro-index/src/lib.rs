@@ -4,6 +4,7 @@ pub mod database_pool;
 pub mod errors;
 pub mod indexer;
 pub mod manifest;
+pub mod migrations;
 pub mod schema;
 pub mod watcher;
 
@@ -13,9 +14,18 @@ pub use database_pool::{DatabasePool, DatabasePoolBuilder};
 pub use errors::{IndexError, Result};
 pub use indexer::{FileIndexer, IndexerConfig};
 pub use manifest::{Manifest, ManifestDiff, ManifestEntry};
+pub use migrations::{run_migrations, Migration, MigrationManager};
 pub use watcher::{
-    FolderWatcher, WatcherConfig,
+    create_platform_watcher,
+    should_ignore_path,
+    EventDebouncer,
     // Re-export enhanced types
-    EventKind, FsEvent, PlatformFlags, PlatformWatcher, WatcherCapabilities, WatcherStats,
-    create_platform_watcher, EventDebouncer, should_ignore_path,
+    EventKind,
+    FolderWatcher,
+    FsEvent,
+    PlatformFlags,
+    PlatformWatcher,
+    WatcherCapabilities,
+    WatcherConfig,
+    WatcherStats,
 };

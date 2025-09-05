@@ -20,7 +20,7 @@ use crate::errors::{IndexError, Result};
 // #[cfg(target_os = "macos")]
 // mod macos;
 // #[cfg(target_os = "linux")]
-// mod linux;  
+// mod linux;
 // #[cfg(target_os = "windows")]
 // mod windows;
 mod fallback; // notify-based fallback
@@ -79,15 +79,15 @@ pub struct PlatformFlags {
     /// FSEvents flags (macOS)
     #[cfg(target_os = "macos")]
     pub fsevent_flags: Option<u32>,
-    
+
     /// inotify mask (Linux)  
     #[cfg(target_os = "linux")]
     pub inotify_mask: Option<u32>,
-    
+
     /// USN record data (Windows)
     #[cfg(target_os = "windows")]
     pub usn_record: Option<WindowsUsnRecord>,
-    
+
     /// Whether this event indicates a directory
     pub is_directory: bool,
     /// Whether the event represents a symbolic link
@@ -128,21 +128,21 @@ pub struct WatcherCapabilities {
 pub trait PlatformWatcher: Send + Sync {
     /// Start watching a path (recursively if specified)
     async fn watch(&mut self, path: &Path, recursive: bool) -> Result<()>;
-    
+
     /// Stop watching a specific path
     async fn unwatch(&mut self, path: &Path) -> Result<()>;
-    
+
     /// Poll for new file system events (non-blocking)
     async fn poll_events(&mut self) -> Result<Vec<FsEvent>>;
-    
+
     /// Get the capabilities of this watcher implementation
     fn capabilities(&self) -> WatcherCapabilities;
-    
+
     /// Check if the watcher is healthy and functioning
     async fn health_check(&self) -> Result<bool> {
         Ok(true) // Default implementation
     }
-    
+
     /// Get statistics about the watcher's operation
     async fn get_stats(&self) -> WatcherStats {
         WatcherStats::default()
@@ -169,7 +169,7 @@ pub async fn create_platform_watcher() -> Result<Box<dyn PlatformWatcher>> {
     // For now, temporarily disable platform-specific implementations due to
     // complexity of making raw C pointers Send/Sync. These will be re-enabled
     // in a future iteration with proper thread safety.
-    
+
     // TODO: Re-enable platform optimizations after fixing thread safety
     // #[cfg(target_os = "macos")]
     // {
@@ -183,7 +183,7 @@ pub async fn create_platform_watcher() -> Result<Box<dyn PlatformWatcher>> {
     //         }
     //     }
     // }
-    
+
     // #[cfg(target_os = "linux")]
     // {
     //     match LinuxWatcher::new().await {
@@ -196,7 +196,7 @@ pub async fn create_platform_watcher() -> Result<Box<dyn PlatformWatcher>> {
     //         }
     //     }
     // }
-    
+
     // #[cfg(target_os = "windows")]
     // {
     //     match WindowsWatcher::new().await {
@@ -209,7 +209,7 @@ pub async fn create_platform_watcher() -> Result<Box<dyn PlatformWatcher>> {
     //         }
     //     }
     // }
-    
+
     // Use fallback notify-based implementation for now
     info!("Using fallback notify-based watcher (platform optimizations disabled for now)");
     Ok(Box::new(fallback::FallbackWatcher::new().await?))
@@ -256,7 +256,7 @@ impl EventDebouncer {
     pub fn has_pending(&self) -> bool {
         !self.pending.is_empty()
     }
-    
+
     /// Clear all pending events (useful for shutdown)
     pub fn clear(&mut self) {
         self.pending.clear();
@@ -292,8 +292,8 @@ impl Default for WatcherConfig {
                 "*.tmp".to_string(),
                 "*.swp".to_string(),
                 "*~".to_string(),
-                ".#*".to_string(),  // Emacs lock files
-                "#*#".to_string(),   // Emacs backup files
+                ".#*".to_string(), // Emacs lock files
+                "#*#".to_string(), // Emacs backup files
             ],
             batch_size: 100,
             use_platform_optimizations: true,
@@ -304,9 +304,7 @@ impl Default for WatcherConfig {
 
 /// Check if a path should be ignored based on patterns
 pub fn should_ignore_path(path: &Path, patterns: &[String]) -> bool {
-    let name = path.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
     for pattern in patterns {
         if pattern.contains('*') {
@@ -355,7 +353,7 @@ mod tests {
             timestamp: SystemTime::now(),
             flags: PlatformFlags::default(),
         };
-        
+
         debouncer.add_event(event);
 
         // No events ready immediately
@@ -384,13 +382,19 @@ mod tests {
         let patterns = vec!["*.tmp".to_string(), ".git".to_string()];
 
         // Should ignore .tmp files
-        assert!(should_ignore_path(&PathBuf::from("/test/file.tmp"), &patterns));
+        assert!(should_ignore_path(
+            &PathBuf::from("/test/file.tmp"),
+            &patterns
+        ));
 
         // Should ignore .git directory
         assert!(should_ignore_path(&PathBuf::from("/test/.git"), &patterns));
 
         // Should not ignore regular files
-        assert!(!should_ignore_path(&PathBuf::from("/test/file.txt"), &patterns));
+        assert!(!should_ignore_path(
+            &PathBuf::from("/test/file.txt"),
+            &patterns
+        ));
     }
 
     #[tokio::test]
@@ -398,11 +402,13 @@ mod tests {
         // This should successfully create a watcher on any platform
         let watcher = create_platform_watcher().await;
         assert!(watcher.is_ok());
-        
+
         let watcher = watcher.unwrap();
         let capabilities = watcher.capabilities();
-        
+
         // All platforms should support basic watching
-        assert!(capabilities.max_path_length.is_none() || capabilities.max_path_length.unwrap() > 100);
+        assert!(
+            capabilities.max_path_length.is_none() || capabilities.max_path_length.unwrap() > 100
+        );
     }
 }

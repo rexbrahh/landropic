@@ -123,7 +123,7 @@ async fn demo_with_watcher(
     };
 
     // Create the folder watcher
-    let mut watcher = FolderWatcher::new(watcher_config)?;
+    let mut watcher = FolderWatcher::new(watcher_config).await?;
 
     // Start watching the folder
     watcher

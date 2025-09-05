@@ -83,7 +83,10 @@ impl FileIndexer {
         // Get the next version number (check for existing manifests)
         let next_version = self
             .database
-            .get_latest_manifest_version(folder_id.clone())
+            .get_latest_manifest_version(
+                folder_id.clone(),
+                canonical_path.to_string_lossy().to_string(),
+            )
             .await?
             .unwrap_or(0)
             + 1;

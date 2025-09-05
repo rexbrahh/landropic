@@ -4,7 +4,9 @@
 //! optimizations are unavailable or disabled.
 
 use async_trait::async_trait;
-use notify::{Config, Event, EventKind as NotifyEventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{
+    Config, Event, EventKind as NotifyEventKind, RecommendedWatcher, RecursiveMode, Watcher,
+};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +14,9 @@ use std::time::SystemTime;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, trace, warn};
 
-use super::{EventKind, FsEvent, PlatformFlags, PlatformWatcher, WatcherCapabilities, WatcherStats};
+use super::{
+    EventKind, FsEvent, PlatformFlags, PlatformWatcher, WatcherCapabilities, WatcherStats,
+};
 use crate::errors::{IndexError, Result};
 
 /// Fallback watcher using the notify crate
@@ -52,7 +56,8 @@ impl FallbackWatcher {
                 }
             },
             Config::default(),
-        ).map_err(|e| IndexError::WatcherError(format!("Failed to create notify watcher: {}", e)))?;
+        )
+        .map_err(|e| IndexError::WatcherError(format!("Failed to create notify watcher: {}", e)))?;
 
         Ok(Self {
             watcher: Some(watcher),
@@ -101,7 +106,7 @@ impl FallbackWatcher {
         };
 
         let path = event.paths.first()?.clone();
-        
+
         // Get basic file information if possible
         let (is_directory, is_symlink, file_size) = match std::fs::metadata(&path) {
             Ok(metadata) => (
@@ -136,10 +141,14 @@ impl FallbackWatcher {
 #[async_trait]
 impl PlatformWatcher for FallbackWatcher {
     async fn watch(&mut self, path: &Path, recursive: bool) -> Result<()> {
-        let canonical_path = path.canonicalize()
+        let canonical_path = path
+            .canonicalize()
             .map_err(|e| IndexError::WatcherError(format!("Cannot canonicalize path: {}", e)))?;
 
-        debug!("Adding fallback watch for path: {:?} (recursive: {})", canonical_path, recursive);
+        debug!(
+            "Adding fallback watch for path: {:?} (recursive: {})",
+            canonical_path, recursive
+        );
 
         if let Some(ref mut watcher) = self.watcher {
             let mode = if recursive {
@@ -148,7 +157,8 @@ impl PlatformWatcher for FallbackWatcher {
                 RecursiveMode::NonRecursive
             };
 
-            watcher.watch(&canonical_path, mode)
+            watcher
+                .watch(&canonical_path, mode)
                 .map_err(|e| IndexError::WatcherError(format!("Failed to watch path: {}", e)))?;
 
             self.watched_paths.write().await.insert(canonical_path);
@@ -161,17 +171,19 @@ impl PlatformWatcher for FallbackWatcher {
     }
 
     async fn unwatch(&mut self, path: &Path) -> Result<()> {
-        let canonical_path = path.canonicalize()
+        let canonical_path = path
+            .canonicalize()
             .map_err(|e| IndexError::WatcherError(format!("Cannot canonicalize path: {}", e)))?;
 
         debug!("Removing fallback watch for path: {:?}", canonical_path);
 
         if let Some(ref mut watcher) = self.watcher {
-            watcher.unwatch(&canonical_path)
+            watcher
+                .unwatch(&canonical_path)
                 .map_err(|e| IndexError::WatcherError(format!("Failed to unwatch path: {}", e)))?;
 
             let removed = self.watched_paths.write().await.remove(&canonical_path);
-            
+
             if removed {
                 let mut stats = self.stats.write().await;
                 stats.paths_watched = stats.paths_watched.saturating_sub(1);
@@ -201,13 +213,13 @@ impl PlatformWatcher for FallbackWatcher {
 
     fn capabilities(&self) -> WatcherCapabilities {
         WatcherCapabilities {
-            supports_rename_tracking: true,  // notify can track renames on some platforms
-            supports_file_id: false,         // notify doesn't provide file IDs
-            max_watches: None,               // notify handles platform limits internally
+            supports_rename_tracking: true, // notify can track renames on some platforms
+            supports_file_id: false,        // notify doesn't provide file IDs
+            max_watches: None,              // notify handles platform limits internally
             supports_overflow_detection: false, // notify doesn't expose overflow info
-            supports_network_paths: true,    // Depends on platform, but generally yes
-            max_path_length: None,           // Platform dependent
-            provides_file_size: true,        // We stat the file ourselves
+            supports_network_paths: true,   // Depends on platform, but generally yes
+            max_path_length: None,          // Platform dependent
+            provides_file_size: true,       // We stat the file ourselves
         }
     }
 
@@ -240,7 +252,7 @@ mod tests {
     async fn test_fallback_watcher_creation() {
         let watcher = FallbackWatcher::new().await;
         assert!(watcher.is_ok());
-        
+
         let watcher = watcher.unwrap();
         let capabilities = watcher.capabilities();
         assert!(capabilities.supports_rename_tracking);
@@ -288,14 +300,15 @@ mod tests {
                 }
                 sleep(Duration::from_millis(50)).await;
             }
-        }).await;
+        })
+        .await;
 
         assert!(events.is_ok());
         let events = events.unwrap();
-        
+
         // Should have at least one event
         assert!(!events.is_empty());
-        
+
         // Should be a creation event
         let create_event = events.iter().find(|e| e.kind == EventKind::Created);
         assert!(create_event.is_some());
@@ -313,7 +326,7 @@ mod tests {
 
         let fs_event = FallbackWatcher::convert_notify_event(notify_event);
         assert!(fs_event.is_some());
-        
+
         let fs_event = fs_event.unwrap();
         assert_eq!(fs_event.kind, EventKind::Created);
         assert_eq!(fs_event.path, PathBuf::from("/test/file.txt"));
