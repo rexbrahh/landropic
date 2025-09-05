@@ -10,16 +10,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             fsync_policy: FsyncPolicy::Always,
             enable_recovery: true,
             compression: CompressionType::None,
+            packfile_config: Default::default(),
+            enable_packfiles: false,  // Disabled for v1.0
         }),
         ("Batch", ContentStoreConfig {
             fsync_policy: FsyncPolicy::Batch(5),
             enable_recovery: true,
             compression: CompressionType::None,
+            packfile_config: Default::default(),
+            enable_packfiles: false,  // Disabled for v1.0
         }),
         ("Never", ContentStoreConfig {
             fsync_policy: FsyncPolicy::Never,
             enable_recovery: true,
             compression: CompressionType::None,
+            packfile_config: Default::default(),
+            enable_packfiles: false,  // Disabled for v1.0
         }),
     ];
 

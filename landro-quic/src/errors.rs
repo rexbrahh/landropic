@@ -81,6 +81,27 @@ impl QuicError {
 
 pub type Result<T> = std::result::Result<T, QuicError>;
 
+// Manual Clone implementation to handle non-cloneable wrapped errors
+impl Clone for QuicError {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Io(e) => Self::Protocol(format!("IO error: {}", e)),
+            Self::Connection(e) => Self::Protocol(format!("Connection error: {}", e)),
+            Self::Connect(e) => Self::Protocol(format!("Connect error: {}", e)),
+            Self::TlsConfig(s) => Self::TlsConfig(s.clone()),
+            Self::Stream(s) => Self::Stream(s.clone()),
+            Self::Protocol(s) => Self::Protocol(s.clone()),
+            Self::Timeout => Self::Timeout,
+            Self::HandshakeTimeout { timeout_secs } => Self::HandshakeTimeout { timeout_secs: *timeout_secs },
+            Self::HandshakeFailed { reason } => Self::HandshakeFailed { reason: reason.clone() },
+            Self::VersionMismatch { details } => Self::VersionMismatch { details: details.clone() },
+            Self::AuthenticationFailed { reason } => Self::AuthenticationFailed { reason: reason.clone() },
+            Self::ServerAlreadyRunning => Self::ServerAlreadyRunning,
+            Self::Crypto(e) => Self::Protocol(format!("Crypto error: {}", e)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

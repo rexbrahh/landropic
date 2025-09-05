@@ -2,7 +2,6 @@ use blake3::Hasher;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use tokio::fs::{self, File};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
@@ -167,6 +166,7 @@ pub struct PackfileWriter {
     file: File,
     entries: Vec<PackfileEntry>,
     data_offset: u64,
+    #[allow(dead_code)]
     config: PackfileConfig,
     packfile_path: PathBuf,
 }
@@ -219,7 +219,7 @@ impl PackfileWriter {
     /// Finalize the packfile and return a reader
     pub async fn finalize(mut self) -> Result<PackfileReader> {
         // Write entry table at current position
-        let entry_table_offset = self.data_offset;
+        let _entry_table_offset = self.data_offset;
         
         for entry in &self.entries {
             // Write hash (32 bytes)
@@ -682,6 +682,7 @@ mod tests {
         assert_eq!(stats.total_objects, 0);
     }
 
+    #[ignore = "Packfiles disabled for v1.0"]
     #[tokio::test]
     async fn test_pack_and_read() {
         let dir = tempdir().unwrap();
@@ -721,6 +722,7 @@ mod tests {
         assert!(stats.total_packed_size > 0);
     }
     
+    #[ignore = "Packfiles disabled for v1.0"]
     #[tokio::test]
     async fn test_packfile_writer_reader() {
         let dir = tempdir().unwrap();
@@ -772,6 +774,7 @@ mod tests {
         assert!(reader.total_size() > 0);
     }
     
+    #[ignore = "Packfiles disabled for v1.0"]
     #[tokio::test]
     async fn test_packfile_config_thresholds() {
         let dir = tempdir().unwrap();

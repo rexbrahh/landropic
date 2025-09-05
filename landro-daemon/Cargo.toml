@@ -27,6 +27,8 @@ zeroconf = { workspace = true }
 gethostname = "0.4"
 hex = { workspace = true }
 whoami = "1.4"
+futures = "0.3"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+rustls = "0.23"

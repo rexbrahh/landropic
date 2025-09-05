@@ -9,12 +9,12 @@ use tokio::fs;
 use tokio::sync::RwLock;
 use tracing::{info, warn, error, debug};
 
-use crate::errors::{Result, SyncError};
-use crate::state::{SyncDatabase, PeerSyncState};
+use crate::errors::Result;
+use crate::state::AsyncSyncDatabase;
 
 /// Recovery manager for handling crash safety and resumption
 pub struct RecoveryManager {
-    database: Arc<RwLock<SyncDatabase>>,
+    database: AsyncSyncDatabase,
     recovery_log_path: PathBuf,
     active_operations: Arc<RwLock<HashMap<String, Operation>>>,
 }
@@ -85,7 +85,7 @@ pub struct RecoveryStats {
 impl RecoveryManager {
     /// Create a new recovery manager
     pub async fn new(
-        database: Arc<RwLock<SyncDatabase>>,
+        database: AsyncSyncDatabase,
         storage_path: impl AsRef<Path>,
     ) -> Result<Self> {
         let storage_path = storage_path.as_ref();
@@ -324,16 +324,13 @@ impl RecoveryManager {
         }
         
         // Add back to pending transfers in database
-        {
-            let mut db = self.database.write().await;
-            db.add_pending_transfer(
-                peer_id,
-                "default", // TODO: Get actual folder ID
-                file_path,
-                chunk_hash,
-                0, // High priority for resumed transfers
-            )?;
-        }
+        self.database.add_pending_transfer(
+            peer_id,
+            "default", // TODO: Get actual folder ID
+            file_path,
+            chunk_hash,
+            0, // High priority for resumed transfers
+        ).await?;
         
         // Transfer will be resumed by the scheduler
         Ok(false)
@@ -515,14 +512,12 @@ pub fn generate_operation_id() -> String {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use crate::state::SyncDatabase;
 
     #[tokio::test]
     async fn test_recovery_manager() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = SyncDatabase::open_in_memory().unwrap();
-        let db = Arc::new(RwLock::new(db));
+        let db = AsyncSyncDatabase::open_in_memory().await.unwrap();
         
         let recovery_manager = RecoveryManager::new(db, temp_dir.path()).await.unwrap();
         

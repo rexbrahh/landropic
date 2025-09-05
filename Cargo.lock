@@ -1867,6 +1867,7 @@ dependencies = [
 name = "landro-daemon"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gethostname",
  "hex",
  "landro-cas",
@@ -1879,6 +1880,7 @@ dependencies = [
  "mdns-sd",
  "notify",
  "quinn",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
@@ -1934,6 +1936,7 @@ name = "landro-quic"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "bytes",
  "chrono",
  "futures",
@@ -1943,6 +1946,7 @@ dependencies = [
  "prost",
  "prost-types",
  "quinn",
+ "rand 0.8.5",
  "rustls",
  "serde",
  "tempfile",

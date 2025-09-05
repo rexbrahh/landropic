@@ -5,7 +5,7 @@ use tokio::sync::{RwLock, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{info, warn, error, debug};
 
-use landro_quic::server::Server as QuicServer;
+use landro_quic::QuicServer;
 use landro_sync::{SyncOrchestrator, SyncConfig};
 use landro_index::async_indexer::AsyncIndexer;
 use crate::discovery::DiscoveryService;
@@ -105,7 +105,8 @@ impl Daemon {
         let quic_server = self.start_quic_server().await?;
         
         // Start mDNS discovery
-        let discovery_service = self.start_discovery_service(quic_server.port()).await?;
+        let port = quic_server.local_addr().map(|addr| addr.port()).unwrap_or(9876);
+        let discovery_service = self.start_discovery_service(port).await?;
         
         // Update state
         {
@@ -126,25 +127,29 @@ impl Daemon {
     }
 
     /// Start QUIC server
-    async fn start_quic_server(&self) -> Result<Arc<QuicServer>, Box<dyn std::error::Error>> {
+    async fn start_quic_server(&self) -> Result<Arc<QuicServer>, String> {
         info!("Starting QUIC server on {}", self.config.bind_addr);
         
-        // Load device identity
-        let identity = landro_crypto::DeviceIdentity::load(None).await?;
+        // Create device identity
+        let identity = Arc::new(landro_crypto::DeviceIdentity::generate(&self.config.device_name).map_err(|e| e.to_string())?);
         
-        // Create server
-        let server: QuicServer = QuicServer::new(
-            self.config.bind_addr,
-            identity.device_id().0.to_vec(),
-            &self.config.device_name,
-        ).await?;
+        // Create certificate verifier for pairing/testing
+        let verifier = Arc::new(landro_crypto::CertificateVerifier::for_pairing());
+        
+        // Create QUIC configuration
+        let quic_config = landro_quic::QuicConfig::default().bind_addr(self.config.bind_addr);
+
+        let mut server = QuicServer::new(identity, verifier, quic_config);
+        
+        // Start the server
+        server.start().await.map_err(|e| e.to_string())?;
         
         // Start listening
         let server = Arc::new(server);
         let server_clone = server.clone();
         
         let task = tokio::spawn(async move {
-            if let Err(e) = server_clone.listen().await {
+            if let Err(e) = server_clone.run().await {
                 error!("QUIC server error: {}", e);
             }
         });
@@ -155,10 +160,10 @@ impl Daemon {
     }
 
     /// Start mDNS discovery service
-    async fn start_discovery_service(&self, port: u16) -> Result<Arc<Mutex<DiscoveryService>>, Box<dyn std::error::Error>> {
+    async fn start_discovery_service(&self, port: u16) -> Result<Arc<Mutex<DiscoveryService>>, String> {
         info!("Starting mDNS discovery service");
         
-        let mut discovery = DiscoveryService::new(&self.config.device_name)?;
+        let mut discovery = DiscoveryService::new(&self.config.device_name).map_err(|e| e.to_string())?;
         
         // Start advertising with our capabilities
         discovery.start_advertising(
@@ -168,7 +173,7 @@ impl Daemon {
                 "transfer".to_string(),
                 "v0.1.0".to_string(),
             ],
-        ).await?;
+        ).await.map_err(|e| e.to_string())?;
         
         Ok(Arc::new(Mutex::new(discovery)))
     }
@@ -189,7 +194,10 @@ impl Daemon {
                 interval.tick().await;
                 
                 // Browse for peers
-                match discovery.lock().await.browse_peers().await {
+                let browse_result = discovery.lock().await.browse_peers().await
+                    .map_err(|e| e.to_string());
+                    
+                match browse_result {
                     Ok(peers) => {
                         debug!("Found {} peers via mDNS", peers.len());
                         for peer in peers {
@@ -258,44 +266,67 @@ impl Daemon {
         // Create file watcher
         let watcher = FileWatcher::new(path.clone())?;
         
-        // Start watching
+        // Start watching with complete sync pipeline
         let indexer = state.indexer.clone().unwrap();
-        let _sync_orch = state.sync_orchestrator.clone().unwrap();
+        let sync_orch = state.sync_orchestrator.clone().unwrap();
+        let discovery = state.discovery_service.clone().unwrap();
+        let auto_sync = self.config.auto_sync;
         
-        // For now, create a simple callback that doesn't use the sync orchestrator
-        // to avoid the Send + Sync issues with rusqlite::Connection
         watcher.start(move |events| {
             let indexer = indexer.clone();
+            let sync_orch = sync_orch.clone();
+            let discovery = discovery.clone();
             let _path = path.clone();
             
             tokio::spawn(async move {
                 for event in events {
                     debug!("File event: {:?}", event);
                     
-                    // Update index for the affected file/directory
+                    // Step 1: Update index for the affected file/directory
                     match &event.kind {
                         FileEventKind::Created | FileEventKind::Modified => {
                             if let Err(e) = indexer.index_folder(&event.path).await {
                                 error!("Failed to index path {}: {}", event.path.display(), e);
+                                continue;
                             }
+                            info!("Indexed file change: {}", event.path.display());
                         }
                         FileEventKind::Deleted => {
-                            // For now, just log deleted files - proper deletion would require
-                            // more complex manifest management
+                            // For deleted files, we should update the manifest to reflect the deletion
                             debug!("File deleted: {}", event.path.display());
+                            // TODO: Implement deletion in manifest
                         }
                         FileEventKind::Renamed { from, to } => {
                             debug!("File renamed: {} -> {}", from.display(), to.display());
                             if let Err(e) = indexer.index_folder(to).await {
                                 error!("Failed to index renamed file {}: {}", to.display(), e);
+                                continue;
                             }
                         }
                     }
                     
-                    // Trigger sync if auto-sync is enabled
-                    // For now, we'll just log this - full sync triggering would need
-                    // peer discovery and connection management
-                    debug!("Auto-sync would be triggered for path: {}", event.path.display());
+                    // Step 2: Trigger sync with discovered peers if auto-sync is enabled
+                    if auto_sync {
+                        debug!("Auto-sync triggered for path: {}", event.path.display());
+                        
+                        // Get current peers from discovery
+                        if let Ok(peers) = discovery.lock().await.browse_peers().await {
+                            for peer in peers {
+                                // Start sync with this peer for the changed files
+                                if let Err(e) = sync_orch.start_sync(
+                                    peer.device_id.clone(),
+                                    peer.device_name.clone(),
+                                ).await {
+                                    warn!("Failed to start sync with peer {} after file change: {}", 
+                                        peer.device_name, e);
+                                } else {
+                                    info!("Started sync with peer {} for file change", peer.device_name);
+                                }
+                            }
+                        } else {
+                            debug!("No peers available for auto-sync");
+                        }
+                    }
                 }
             });
         })?;
@@ -489,24 +520,31 @@ async fn handle_sync_stream(
             // Manifest exchange request
             debug!("Handling manifest exchange for peer: {}", peer_id);
             
-            // For now, just send a simple response
-            // In a full implementation, this would:
-            // 1. Read the peer's manifest
-            // 2. Compare with our local manifest
-            // 3. Schedule transfers for differences
-            // 4. Send back our manifest or diff
+            // TODO: Implement proper manifest exchange
+            // This should:
+            // 1. Read the peer's manifest from the stream
+            // 2. Load our local manifest from the indexer
+            // 3. Compare manifests to find differences (missing/updated files)
+            // 4. Schedule transfers for the differences through sync orchestrator
+            // 5. Send back our manifest or diff response
             
-            let response = b"manifest_ack";
-            send.write_all(response).await?;
-            send.finish().await?;
+            // For now, simulate manifest exchange
+            let response = serde_json::json!({
+                "type": "manifest_response",
+                "status": "success",
+                "message": "Manifest exchange completed - would schedule actual transfers here"
+            }).to_string();
             
-            info!("Completed manifest exchange with peer: {}", peer_id);
+            send.write_all(response.as_bytes()).await?;
+            send.finish()?;
+            
+            info!("Completed manifest exchange with peer: {} (simulated)", peer_id);
         }
         1 => {
-            // File transfer request
-            debug!("Handling file transfer for peer: {}", peer_id);
+            // File transfer request  
+            debug!("Handling file transfer request for peer: {}", peer_id);
             
-            // Read transfer metadata (file path, chunk hash, etc.)
+            // Read transfer metadata (file path, chunk hashes, etc.)
             let mut metadata_len = [0u8; 4];
             recv.read_exact(&mut metadata_len).await?;
             let len = u32::from_be_bytes(metadata_len) as usize;
@@ -514,12 +552,41 @@ async fn handle_sync_stream(
             let mut metadata = vec![0u8; len];
             recv.read_exact(&mut metadata).await?;
             
-            // For now, just acknowledge the transfer
-            let response = b"transfer_ack";
-            send.write_all(response).await?;
-            send.finish().await?;
+            // Parse metadata (in a real implementation, this would be protobuf)
+            let metadata_str = String::from_utf8(metadata)?;
+            debug!("Received transfer metadata: {}", metadata_str);
             
-            debug!("Completed file transfer handling for peer: {}", peer_id);
+            // TODO: Use QuicTransferEngine for actual transfer
+            // This should:
+            // 1. Parse transfer request (file path, chunks needed, etc.)
+            // 2. Create QuicTransferEngine for this connection
+            // 3. Start resumable transfer with the engine
+            // 4. Handle chunk transfers and progress updates
+            
+            // For now, acknowledge the transfer request
+            let response = serde_json::json!({
+                "type": "transfer_response", 
+                "status": "accepted",
+                "message": "Transfer request accepted - would use QuicTransferEngine here"
+            }).to_string();
+            
+            send.write_all(response.as_bytes()).await?;
+            send.finish()?;
+            
+            debug!("Completed file transfer handling for peer: {} (simulated)", peer_id);
+        }
+        2 => {
+            // Chunk data transfer
+            debug!("Handling chunk data transfer for peer: {}", peer_id);
+            
+            // This would handle actual chunk content transfer
+            // using the QuicTransferEngine and resumable transfer protocols
+            
+            let response = b"chunk_ack";
+            send.write_all(response).await?;
+            send.finish()?;
+            
+            debug!("Completed chunk transfer for peer: {}", peer_id);
         }
         _ => {
             warn!("Unknown message type: {}", msg_type[0]);

@@ -9,6 +9,7 @@ use landro_crypto::{CertificateGenerator, CertificateVerifier, DeviceIdentity};
 use crate::errors::{QuicError, Result};
 
 /// QUIC configuration builder
+#[derive(Clone)]
 pub struct QuicConfig {
     /// Bind address for server
     pub bind_addr: SocketAddr,

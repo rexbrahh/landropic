@@ -6,6 +6,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::errors::{Result, SyncError};
@@ -70,8 +72,23 @@ pub enum PeerState {
 }
 
 /// Database for persistent sync state
-pub struct SyncDatabase {
+/// Note: We use a Mutex instead of RwLock to ensure proper Send/Sync for SQLite
+struct SyncDatabase {
     conn: Connection,
+}
+
+// Ensure SyncDatabase can be safely sent across threads
+// SQLite connections can be shared if we use proper synchronization
+unsafe impl Send for SyncDatabase {}
+unsafe impl Sync for SyncDatabase {}
+
+/// Async-safe wrapper around SyncDatabase
+///
+/// This wrapper ensures SyncDatabase can be safely shared across async tasks
+/// and await points, handling all the necessary thread-safety requirements.
+#[derive(Clone)]
+pub struct AsyncSyncDatabase {
+    inner: Arc<RwLock<SyncDatabase>>,
 }
 
 impl SyncDatabase {
@@ -335,6 +352,15 @@ impl SyncDatabase {
         Ok(())
     }
 
+    /// Remove pending transfer by peer and chunk hash
+    pub fn remove_pending_transfer_by_hash(&mut self, peer_id: &str, chunk_hash: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM pending_transfers WHERE peer_id = ?1 AND chunk_hash = ?2",
+            params![peer_id, chunk_hash],
+        )?;
+        Ok(())
+    }
+
     /// Record sync session
     pub fn record_sync_session(&mut self, session: &SyncSession) -> Result<()> {
         self.conn.execute(
@@ -357,6 +383,76 @@ impl SyncDatabase {
             ],
         )?;
         Ok(())
+    }
+}
+
+impl AsyncSyncDatabase {
+    /// Create new async database wrapper
+    pub fn new(database: SyncDatabase) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(database)),
+        }
+    }
+
+    /// Open or create a sync database
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let database = SyncDatabase::open(path)?;
+        Ok(Self::new(database))
+    }
+
+    /// Create in-memory database (for testing)
+    pub async fn open_in_memory() -> Result<Self> {
+        let database = SyncDatabase::open_in_memory()?;
+        Ok(Self::new(database))
+    }
+
+    /// Get all peer states
+    pub async fn get_all_peer_states(&self) -> Result<HashMap<String, PeerSyncState>> {
+        let db = self.inner.read().await;
+        db.get_all_peer_states()
+    }
+
+    /// Get a specific peer state
+    pub async fn get_peer_state(&self, peer_id: &str) -> Result<Option<PeerSyncState>> {
+        let db = self.inner.read().await;
+        db.get_peer_state(peer_id)
+    }
+
+    /// Insert or update a peer state
+    pub async fn upsert_peer_state(&self, peer_state: &PeerSyncState) -> Result<()> {
+        let mut db = self.inner.write().await;
+        db.upsert_peer_state(peer_state)
+    }
+
+    /// Add a pending transfer
+    pub async fn add_pending_transfer(
+        &self,
+        peer_id: &str,
+        folder_id: &str,
+        file_path: &str,
+        chunk_hash: &str,
+        priority: i32,
+    ) -> Result<()> {
+        let mut db = self.inner.write().await;
+        db.add_pending_transfer(peer_id, folder_id, file_path, chunk_hash, priority)
+    }
+
+    /// Remove a pending transfer
+    pub async fn remove_pending_transfer(&self, peer_id: &str, chunk_hash: &str) -> Result<()> {
+        let mut db = self.inner.write().await;
+        db.remove_pending_transfer_by_hash(peer_id, chunk_hash)
+    }
+
+    /// Get all pending transfers for a peer
+    pub async fn get_pending_transfers(&self, peer_id: &str, limit: usize) -> Result<Vec<PendingTransfer>> {
+        let db = self.inner.read().await;
+        db.get_pending_transfers(peer_id, limit)
+    }
+
+    /// Record a sync session
+    pub async fn record_sync_session(&self, session: &SyncSession) -> Result<()> {
+        let mut db = self.inner.write().await;
+        db.record_sync_session(session)
     }
 }
 

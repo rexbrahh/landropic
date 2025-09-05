@@ -20,4 +20,4 @@ pub use orchestrator::{SyncOrchestrator, SyncConfig};
 pub use progress::{SyncProgress, TransferProgress};
 pub use recovery::{RecoveryManager, Operation, OperationType, OperationStatus, RecoveryStats, generate_operation_id};
 pub use scheduler::{TransferScheduler, TransferPriority};
-pub use state::{SyncState, PeerSyncState, SyncDatabase};
+pub use state::{SyncState, PeerSyncState, AsyncSyncDatabase};

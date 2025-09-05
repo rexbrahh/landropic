@@ -10,7 +10,7 @@ use crate::conflict::{ConflictResolver, ConflictResolution};
 use crate::errors::{Result, SyncError};
 use crate::progress::SyncProgress;
 use crate::scheduler::{TransferScheduler, TransferPriority, TransferRequest};
-use crate::state::{SyncDatabase, PeerSyncState, PeerState, SyncState};
+use crate::state::{AsyncSyncDatabase, PeerSyncState, PeerState, SyncState};
 
 /// Configuration for sync orchestrator
 #[derive(Debug, Clone)]
@@ -39,7 +39,7 @@ impl Default for SyncConfig {
 /// Main sync orchestrator
 pub struct SyncOrchestrator {
     config: SyncConfig,
-    database: Arc<RwLock<SyncDatabase>>,
+    database: AsyncSyncDatabase,
     state: Arc<RwLock<SyncState>>,
     peer_states: Arc<RwLock<HashMap<String, PeerSyncState>>>,
     scheduler: Arc<RwLock<TransferScheduler>>,
@@ -50,15 +50,15 @@ pub struct SyncOrchestrator {
 impl SyncOrchestrator {
     /// Create new orchestrator
     pub async fn new(config: SyncConfig) -> Result<Self> {
-        let database = SyncDatabase::open(&config.database_path)?;
-        let peer_states = database.get_all_peer_states()?;
+        let database = AsyncSyncDatabase::open(&config.database_path).await?;
+        let peer_states = database.get_all_peer_states().await?;
         
         let scheduler = TransferScheduler::new(config.max_concurrent_transfers);
         let conflict_resolver = ConflictResolver::new(config.default_conflict_resolution.clone());
 
         Ok(Self {
             config,
-            database: Arc::new(RwLock::new(database)),
+            database,
             state: Arc::new(RwLock::new(SyncState::Idle)),
             peer_states: Arc::new(RwLock::new(peer_states)),
             scheduler: Arc::new(RwLock::new(scheduler)),
@@ -94,10 +94,7 @@ impl SyncOrchestrator {
         };
 
         // Save to database and memory
-        {
-            let mut db = self.database.write().await;
-            db.upsert_peer_state(&peer_state)?;
-        }
+        self.database.upsert_peer_state(&peer_state).await?;
         
         {
             let mut peer_states = self.peer_states.write().await;
@@ -173,16 +170,13 @@ impl SyncOrchestrator {
         scheduler.schedule(request, priority);
 
         // Also add to database for persistence
-        {
-            let mut db = self.database.write().await;
-            db.add_pending_transfer(
-                &peer_id,
-                "default", // TODO: Get actual folder ID
-                &file_path,
-                &chunk_hash,
-                priority as i32,
-            )?;
-        }
+        self.database.add_pending_transfer(
+            &peer_id,
+            "default", // TODO: Get actual folder ID
+            &file_path,
+            &chunk_hash,
+            priority as i32,
+        ).await?;
 
         debug!("Scheduled transfer: {} ({})", file_path, chunk_hash);
         Ok(())
@@ -238,8 +232,7 @@ impl SyncOrchestrator {
                 peer_state.last_sync = Some(chrono::Utc::now());
                 
                 // Save to database
-                let mut db = self.database.write().await;
-                db.upsert_peer_state(peer_state)?;
+                self.database.upsert_peer_state(peer_state).await?;
             }
         }
 
