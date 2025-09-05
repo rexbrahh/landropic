@@ -71,6 +71,20 @@ impl rustls::client::danger::ServerCertVerifier for LandropicCertVerifier {
             ));
         }
 
+        // If we have a pinned certificate for this device, verify it matches
+        if let Some(pinned_cert) = self.verifier.get_pinned_certificate(&device_id) {
+            if pinned_cert.as_ref() != end_entity.as_ref() {
+                warn!("Certificate mismatch for device {}: pinned certificate does not match", device_id);
+                return Err(rustls::Error::InvalidCertificate(
+                    rustls::CertificateError::Other(rustls::OtherError(Arc::new(
+                        CryptoError::CertificateValidation(
+                            "Certificate does not match pinned certificate".to_string(),
+                        ),
+                    ))),
+                ));
+            }
+        }
+
         // TODO: Implement proper self-signature verification with x509-parser
         // For now, we rely on rustls's built-in TLS signature verification
         // Self-signature verification would require more complex X.509 parsing
@@ -194,6 +208,20 @@ impl rustls::server::danger::ClientCertVerifier for LandropicClientCertVerifier 
             return Err(rustls::Error::InvalidCertificate(
                 rustls::CertificateError::UnknownIssuer,
             ));
+        }
+
+        // If we have a pinned certificate for this device, verify it matches
+        if let Some(pinned_cert) = self.verifier.get_pinned_certificate(&device_id) {
+            if pinned_cert.as_ref() != end_entity.as_ref() {
+                warn!("Client certificate mismatch for device {}: pinned certificate does not match", device_id);
+                return Err(rustls::Error::InvalidCertificate(
+                    rustls::CertificateError::Other(rustls::OtherError(Arc::new(
+                        CryptoError::CertificateValidation(
+                            "Certificate does not match pinned certificate".to_string(),
+                        ),
+                    ))),
+                ));
+            }
         }
 
         // TODO: Implement proper self-signature verification with x509-parser

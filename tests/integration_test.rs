@@ -23,7 +23,7 @@ async fn test_quic_handshake() {
         DeviceIdentity::generate("test-client").expect("Failed to generate client identity")
     );
     
-    // Create certificate verifiers (allow any for testing)
+    // Create certificate verifiers (allow any for testing only - requires test feature)
     let server_verifier = Arc::new(CertificateVerifier::allow_any());
     let client_verifier = Arc::new(CertificateVerifier::allow_any());
     
@@ -128,7 +128,7 @@ async fn test_version_negotiation_failure() {
         DeviceIdentity::generate("test-client").expect("Failed to generate client identity")
     );
     
-    // Create certificate verifiers (allow any for testing)
+    // Create certificate verifiers (allow any for testing only - requires test feature)
     let server_verifier = Arc::new(CertificateVerifier::allow_any());
     let client_verifier = Arc::new(CertificateVerifier::allow_any());
     

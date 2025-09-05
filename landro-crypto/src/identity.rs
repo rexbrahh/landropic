@@ -67,6 +67,11 @@ impl DeviceId {
         &self.0
     }
 
+    /// Returns the device ID as a hex string (for file names, etc.)
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.0)
+    }
+
     /// Generates a human-readable fingerprint for device verification.
     ///
     /// The fingerprint is created by taking a Blake3 hash of the device's public key
@@ -98,6 +103,24 @@ impl DeviceId {
 impl std::fmt::Display for DeviceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.fingerprint())
+    }
+}
+
+impl std::str::FromStr for DeviceId {
+    type Err = CryptoError;
+    
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        // Try to parse as hex string (64 characters for 32 bytes)
+        if s.len() == 64 {
+            let bytes = hex::decode(s)
+                .map_err(|e| CryptoError::InvalidKeyFormat(format!("Invalid hex string: {}", e)))?;
+            Self::from_bytes(&bytes)
+        } else {
+            Err(CryptoError::InvalidKeyFormat(format!(
+                "Invalid DeviceId string length: {} (expected 64 hex characters)", 
+                s.len()
+            )))
+        }
     }
 }
 

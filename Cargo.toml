@@ -24,6 +24,7 @@ tempfile = { workspace = true }
 chrono = { workspace = true }
 rustls = { workspace = true }
 prost-types = { workspace = true }
+landro-crypto = { path = "landro-crypto", features = ["dangerous-allow-any"] }
 
 [workspace]
 members = [

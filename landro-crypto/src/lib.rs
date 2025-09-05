@@ -43,7 +43,7 @@
 pub mod certificate;
 pub mod errors;
 pub mod identity;
-// pub mod secure_verifier; // Temporarily disabled due to compilation issues
+pub mod secure_verifier;
 
 pub use certificate::{CertificateGenerator, CertificateVerifier};
 pub use errors::{CryptoError, Result};

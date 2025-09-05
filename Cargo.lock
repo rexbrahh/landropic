@@ -1393,6 +1393,7 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "hex",
+ "pem",
  "rand 0.8.5",
  "rcgen",
  "rustls",

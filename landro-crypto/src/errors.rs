@@ -43,6 +43,14 @@ pub enum CryptoError {
     /// Device identity key file not found at expected location.
     #[error("Key not found at path: {0}")]
     KeyNotFound(String),
+
+    /// Certificate storage or retrieval error.
+    #[error("Certificate storage error: {0}")]
+    Storage(String),
+
+    /// Certificate trust relationship error.
+    #[error("Certificate trust error: {0}")]
+    TrustError(String),
 }
 
 /// Convenient Result type alias for cryptographic operations.
