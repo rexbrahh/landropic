@@ -1,2 +1,124 @@
 *.png
 
+# Development and build artifacts  
+/target/
+# Note: Cargo.lock should be committed for applications
+*.pdb
+*.exe
+*.dll
+*.lib
+*.so
+*.dylib
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-*
+.fleet/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+.directory
+.fuse_hidden*
+
+# Testing
+/coverage/
+/test.db
+/test.db-*
+*.sqlite-wal
+*.sqlite-shm
+/tests/tmp/
+test-results/
+
+# Development tools
+.envrc.local
+.env.local
+sccache/
+/.cargo/config.toml.bak
+
+
+# Logs
+*.log
+logs/
+/log/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+
+# Benchmarking and profiling (Criterion)
+/target/criterion/
+bench-*
+perf.*
+flamegraph*
+*.prof
+criterion-reports/
+/benches/target/
+
+# QUIC connection testing artifacts
+quic-test-*
+connection-logs/
+tls-debug-*
+
+# Landropic-specific files (runtime data)
+.landropic/
+index.sqlite
+index.sqlite-*
+objects/
+*.packfile
+
+# Protobuf generated code (prost-build output)
+/landro-proto/src/generated/
+**/src/generated/
+
+# mDNS/Zeroconf testing artifacts
+mdns-test-*
+service-discovery-*
+
+# Cryptographic materials (development keys only)
+# Note: Production keys should NEVER be in repo
+dev-keys/
+test-certs/
+*.priv
+test.key
+test.crt
+device-*.pem
+peer-certs/
+identity.key
+
+# Network simulation artifacts
+network-sim/
+latency-*
+
+# Documentation builds
+/book/
+/docs/build/
+
+# Python virtual environments (for any Python tooling)
+venv/
+.venv/
+env/
+.env/
+

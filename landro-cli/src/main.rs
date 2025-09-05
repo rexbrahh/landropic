@@ -1,5 +1,5 @@
-use clap::{Parser, Subcommand};
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use tracing_subscriber;
 
 #[derive(Parser)]
@@ -9,7 +9,7 @@ use tracing_subscriber;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
-    
+
     /// Increase logging verbosity
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -23,35 +23,35 @@ enum Commands {
         #[arg(short, long, default_value = "[::]:9876")]
         bind: String,
     },
-    
+
     /// Stop the daemon
     Stop,
-    
+
     /// Show daemon status
     Status,
-    
+
     /// Initialize a new device identity
     Init {
         /// Device name
         #[arg(short, long)]
         name: String,
     },
-    
+
     /// Pair with another device
     Pair {
         /// Pairing code or QR data
         code: String,
     },
-    
+
     /// Add a folder to sync
     Add {
         /// Path to folder
         path: String,
     },
-    
+
     /// List synced folders
     List,
-    
+
     /// Show sync status
     Sync,
 }
@@ -59,18 +59,16 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    
+
     // Initialize logging
     let log_level = match cli.verbose {
         0 => "info",
         1 => "debug",
         _ => "trace",
     };
-    
-    tracing_subscriber::fmt()
-        .with_env_filter(log_level)
-        .init();
-    
+
+    tracing_subscriber::fmt().with_env_filter(log_level).init();
+
     match cli.command {
         Commands::Start { bind } => {
             println!("Starting Landropic daemon on {}", bind);
@@ -86,11 +84,11 @@ async fn main() -> Result<()> {
         }
         Commands::Init { name } => {
             println!("Initializing device identity: {}", name);
-            
+
             use landro_crypto::DeviceIdentity;
             let mut identity = DeviceIdentity::generate(&name)?;
             identity.save(None).await?;
-            
+
             println!("Device ID: {}", identity.device_id());
             println!("Identity saved to ~/.landropic/keys/device_identity.key");
         }
@@ -111,6 +109,6 @@ async fn main() -> Result<()> {
             // TODO: Show sync status
         }
     }
-    
+
     Ok(())
 }

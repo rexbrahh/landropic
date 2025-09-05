@@ -10,22 +10,22 @@ impl ContentHash {
     pub fn from_blake3(hash: blake3::Hash) -> Self {
         Self(hash)
     }
-    
+
     /// Get as bytes
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.0.as_bytes()
     }
-    
+
     /// Create from bytes
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(blake3::Hash::from_bytes(bytes))
     }
-    
+
     /// Convert to hex string
     pub fn to_hex(&self) -> String {
         self.0.to_hex().to_string()
     }
-    
+
     /// Parse from hex string
     pub fn from_hex(hex: &str) -> Result<Self, hex::FromHexError> {
         let bytes = hex::decode(hex)?;

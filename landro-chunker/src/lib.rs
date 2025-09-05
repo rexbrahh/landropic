@@ -1,7 +1,7 @@
 pub mod chunker;
-pub mod hash;
 pub mod errors;
+pub mod hash;
 
-pub use chunker::{Chunker, ChunkerConfig, Chunk};
-pub use hash::{ContentHash, ChunkHash};
+pub use chunker::{Chunk, Chunker, ChunkerConfig};
 pub use errors::{ChunkerError, Result};
+pub use hash::{ChunkHash, ContentHash};

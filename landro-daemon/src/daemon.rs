@@ -14,39 +14,39 @@ impl Daemon {
             running: Arc::new(RwLock::new(false)),
         }
     }
-    
+
     /// Start the daemon
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
         let mut running = self.running.write().await;
         if *running {
             return Err("Daemon already running".into());
         }
-        
+
         *running = true;
         info!("Landropic daemon started");
-        
+
         // TODO: Start all subsystems
         // - QUIC server
         // - mDNS discovery
         // - File watcher
         // - Sync engine
-        
+
         Ok(())
     }
-    
+
     /// Stop the daemon
     pub async fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
         let mut running = self.running.write().await;
         if !*running {
             return Err("Daemon not running".into());
         }
-        
+
         *running = false;
         info!("Landropic daemon stopped");
-        
+
         Ok(())
     }
-    
+
     /// Check if daemon is running
     pub async fn is_running(&self) -> bool {
         *self.running.read().await

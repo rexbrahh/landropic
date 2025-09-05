@@ -23,6 +23,8 @@ tokio = { workspace = true, features = ["fs"] }
 tracing = { workspace = true }
 time = { workspace = true }
 hex = { workspace = true }
+x509-parser = "0.16"
+whoami = "1.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }

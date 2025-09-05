@@ -8,8 +8,7 @@ pub use generated::*;
 
 // Re-export commonly used types
 pub use generated::{
-    Hello, FolderSummary, Want, Ack, Error as ProtoError,
-    Manifest, FileEntry, ChunkData,
+    Ack, ChunkData, Error as ProtoError, FileEntry, FolderSummary, Hello, Manifest, Want,
 };
 
 // Protocol version for compatibility checking

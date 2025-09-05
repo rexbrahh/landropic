@@ -8,14 +8,14 @@ impl Discovery {
     pub fn new() -> Self {
         Self
     }
-    
+
     /// Start advertising our service
     pub async fn start_advertising(&self, port: u16) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting mDNS advertisement on port {}", port);
         // TODO: Implement zeroconf advertising
         Ok(())
     }
-    
+
     /// Browse for peer services
     pub async fn browse_peers(&self) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
         info!("Browsing for peers via mDNS");
