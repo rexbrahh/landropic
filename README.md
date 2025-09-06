@@ -2,7 +2,7 @@
 
 **Cross-platform encrypted LAN file sync - AirDrop for everyone**
 
-[![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org) [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/landropic/landropic#license)
+[![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/landropic/landropic#license)
 
 Landropic is a secure, fast, and reliable file synchronization tool designed for local networks. It provides end-to-end encryption, automatic device discovery, and efficient chunked file transfer using modern protocols.
 
