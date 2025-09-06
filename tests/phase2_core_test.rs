@@ -290,12 +290,16 @@ async fn test_data_integrity() {
         .expect("Failed to create node");
 
     // Test different types of content
+    let medium_data = vec![0x42u8; 1024];
+    let large_data = vec![0xABu8; 64 * 1024];
+    let binary_data: Vec<u8> = (0u8..=255u8).collect();
+    
     let test_cases = vec![
         ("empty.txt", b"".as_slice()),
-        ("small.txt", b"Hello, World!"),
-        ("medium.txt", &vec![0x42u8; 1024]),     // 1KB
-        ("large.txt", &vec![0xABu8; 64 * 1024]), // 64KB
-        ("binary.txt", &(0u8..=255u8).collect::<Vec<u8>>()), // All bytes
+        ("small.txt", b"Hello, World!".as_slice()),
+        ("medium.txt", medium_data.as_slice()),     // 1KB
+        ("large.txt", large_data.as_slice()), // 64KB
+        ("binary.txt", binary_data.as_slice()), // All bytes
     ];
 
     let mut original_hashes = HashMap::new();

@@ -184,7 +184,7 @@ async fn test_file_watcher_detection() {
         debounce_delay: Duration::from_millis(100),
         ..Default::default()
     };
-    let mut watcher = FolderWatcher::new(config).unwrap();
+    let mut watcher = FolderWatcher::new(config).await.unwrap();
 
     // Start watching
     watcher
@@ -267,8 +267,8 @@ async fn test_end_to_end_sync_scenario() {
 
     // Create file watcher for continuous sync
     let watcher_config = WatcherConfig::default();
-    let mut watcher1 = FolderWatcher::new(watcher_config.clone()).unwrap();
-    let mut watcher2 = FolderWatcher::new(watcher_config).unwrap();
+    let mut watcher1 = FolderWatcher::new(watcher_config.clone()).await.unwrap();
+    let mut watcher2 = FolderWatcher::new(watcher_config).await.unwrap();
 
     // Start watching both folders
     watcher1

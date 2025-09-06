@@ -700,7 +700,7 @@ async fn test_data_integrity() {
 
     // Create files with known checksums
     let large_data = vec![0xFFu8; 64 * 1024]; // 64KB of 0xFF
-    let binary_data: Vec<u8> = (0..256).collect(); // Binary data
+    let binary_data: Vec<u8> = (0..=255).collect(); // Binary data
     let medium_data = [0u8; 1024]; // 1KB of zeros
 
     let test_cases = vec![
