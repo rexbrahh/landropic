@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  landropic:
+    image: landropic:latest
+    build: .
+    container_name: landropic
+    restart: unless-stopped
+    ports:
+      - "9990:9990/tcp"
+      - "9990:9990/udp"
+      - "5353:5353/udp"
+    volumes:
+      - ./data:/data
+      - ./sync:/sync
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    networks:
+      - landropic-net
+
+  # Optional: Run multiple instances for testing
+  landropic-peer:
+    image: landropic:latest
+    container_name: landropic-peer
+    restart: unless-stopped
+    ports:
+      - "9991:9990/tcp"
+      - "9991:9990/udp"
+    volumes:
+      - ./data-peer:/data
+      - ./sync-peer:/sync
+    environment:
+      - RUST_LOG=info
+    networks:
+      - landropic-net
+
+networks:
+  landropic-net:
+    driver: bridge

@@ -1,16 +1,16 @@
-*.png
-
-# Development and build artifacts  
+# Rust/Cargo
 /target/
-# Note: Cargo.lock should be committed for applications
+**/*.rs.bk
 *.pdb
-*.exe
-*.dll
-*.lib
-*.so
-*.dylib
+Cargo.lock.backup
 
-# IDE files
+# Nix
+result
+result-*
+.direnv/
+.envrc.local
+
+# IDE
 .vscode/
 .idea/
 *.swp
@@ -18,8 +18,10 @@
 *~
 *.sublime-*
 .fleet/
+.zed/
 
-# macOS
+# OS-specific
+## macOS
 .DS_Store
 .AppleDouble
 .LSOverride
@@ -29,18 +31,23 @@
 .TemporaryItems
 .Trashes
 .VolumeIcon.icns
+*.png
 
-# Windows
+## Windows
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+*.exe
+*.dll
+*.lib
 
-# Linux
-*~
+## Linux
 .directory
 .fuse_hidden*
+*.so
+*.dylib
 
-# Testing
+# Testing & Coverage
 /coverage/
 /test.db
 /test.db-*
@@ -48,13 +55,19 @@ Desktop.ini
 *.sqlite-shm
 /tests/tmp/
 test-results/
+tarpaulin-report.html
+cobertura.xml
+lcov.info
 
-# Development tools
-.envrc.local
-.env.local
-sccache/
-/.cargo/config.toml.bak
-
+# Benchmarking & Profiling
+/target/criterion/
+bench-*
+perf.*
+flamegraph*
+*.prof
+criterion-reports/
+/benches/target/
+callgrind.out.*
 
 # Logs
 *.log
@@ -68,38 +81,51 @@ logs_*/
 *.bak
 *.orig
 *.rej
+*.swn
+*.swo
 
-# Benchmarking and profiling (Criterion)
-/target/criterion/
-bench-*
-perf.*
-flamegraph*
-*.prof
-criterion-reports/
-/benches/target/
+# Build artifacts
+/releases/
+/dist/
+*.tar.gz
+*.zip
 
-# QUIC connection testing artifacts
-quic-test-*
-connection-logs/
-tls-debug-*
+# Docker
+docker-image.tar
 
-# Landropic-specific files (runtime data)
+# Development environment
+.env
+.env.local
+.envrc.local
+sccache/
+/.cargo/config.toml.bak
+
+# Landropic runtime data
 .landropic/
 index.sqlite
 index.sqlite-*
 objects/
 *.packfile
+data/
+data-*/
+sync/
+sync-*/
 
-# Protobuf generated code (prost-build output)
+# Protocol Buffers generated
 /landro-proto/src/generated/
 **/src/generated/
 
-# mDNS/Zeroconf testing artifacts
+# Network testing
+quic-test-*
+connection-logs/
+tls-debug-*
 mdns-test-*
 service-discovery-*
+network-sim/
+latency-*
 
-# Cryptographic materials (development keys only)
-# Note: Production keys should NEVER be in repo
+# Cryptographic materials (development only)
+# Production keys should NEVER be in repo
 dev-keys/
 test-certs/
 *.priv
@@ -108,23 +134,24 @@ test.crt
 device-*.pem
 peer-certs/
 identity.key
-
-# Network simulation artifacts
-network-sim/
-latency-*
+*.p12
+*.pfx
 
 # Documentation builds
 /book/
 /docs/build/
+/target/doc/
+*.pdf
 
-# Python virtual environments (for any Python tooling)
+# Python virtual environments (for tooling)
 venv/
 .venv/
 env/
 .env/
+__pycache__/
+*.py[cod]
 
-
-# Claude Flow generated files
+# Claude Flow / AI agent artifacts
 .claude/settings.local.json
 .mcp.json
 claude-flow.config.json
@@ -148,3 +175,25 @@ claude-flow
 claude-flow.bat
 claude-flow.ps1
 hive-mind-prompt-*.txt
+2025-*-*.txt
+
+# Cachix
+.cachix-cache/
+cachix-deploy-*
+
+# Editor backup files
+\#*#
+.#*
+
+# Core dumps
+core
+core.*
+vgcore.*
+
+# Debug symbols
+*.dSYM/
+
+# Misc
+.history/
+.node_modules/
+.npm/
