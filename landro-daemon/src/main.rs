@@ -16,8 +16,10 @@ use landro_daemon::{
 };
 use landro_index::async_indexer::AsyncIndexer;
 use landro_quic::{QuicConfig, QuicServer};
-use landro_sync::protocol::{SyncSession, SessionState};
+use landro_sync::protocol::SyncSession;
+use landro_sync::state::AsyncSyncDatabase;
 use landro_quic::Connection;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Messages for communication between QUIC and orchestrator
 #[derive(Debug)]
@@ -47,11 +49,23 @@ async fn handle_quic_connection(
     // Open bidirectional stream for sync protocol
     let (mut send_stream, mut recv_stream) = connection.open_bi().await?;
     
+    // Get remote device info (will be populated after handshake)
+    let remote_device_id = connection.remote_device_id().await
+        .map(|id| hex::encode(&id))
+        .unwrap_or_else(|| "unknown".to_string());
+    let remote_device_name = connection.remote_device_name().await
+        .unwrap_or_else(|| "unknown".to_string());
+    
+    // Create database for sync state
+    let db_path = PathBuf::from(".landropic/sync_state.db");
+    let database = AsyncSyncDatabase::open(&db_path).await?;
+    
     // Create sync session
     let session = SyncSession::new(
-        connection.remote_device_id().unwrap_or_default(),
+        remote_device_id.clone(),
+        remote_device_name.clone(),
         store.clone(),
-        indexer.clone(),
+        database,
     );
     
     // Handle sync protocol messages
@@ -95,13 +109,44 @@ async fn process_sync_message(
     msg_data: &[u8],
     store: &Arc<ContentStore>,
 ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-    // This would decode the protobuf message and handle it
-    // For now, return a placeholder
-    Ok(None)
+    use landro_daemon::sync_engine::bloom_diff_protocol::{DiffProtocolHandler, DiffProtocolMessage};
+    
+    // Try to decompress and deserialize the Bloom filter protocol message
+    match DiffProtocolHandler::decompress_message(msg_data) {
+        Ok(bloom_msg) => {
+            // Handle Bloom filter diff protocol messages
+            let handler = DiffProtocolHandler::new();
+            
+            // Process the message (would need access to local manifest)
+            let response = handler.handle_message(
+                bloom_msg,
+                &session.remote_device_id,
+                None, // Would pass local manifest here
+            ).await?;
+            
+            // Compress response if any
+            if let Some(resp_msg) = response {
+                let compressed = DiffProtocolHandler::compress_message(&resp_msg)?;
+                Ok(Some(compressed))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(_) => {
+            // Fall back to legacy protocol handling
+            // This would decode the protobuf message and handle it
+            Ok(None)
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Initialize rustls crypto provider
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+    
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -151,50 +196,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut orchestrator, tx) =
         SyncOrchestrator::new(config, store.clone(), chunker.clone(), indexer.clone(), &storage_path).await?;
 
-    // Initialize QUIC server with proper configuration
-    let quic_config = QuicConfig {
-        bind_addr: SocketAddr::from(([0, 0, 0, 0], 9876)),
-        idle_timeout: std::time::Duration::from_secs(60),
-        keep_alive_interval: std::time::Duration::from_secs(15),
-        max_concurrent_streams: 100,
-        ..QuicConfig::default()
-    };
+    // Initialize QUIC transport through orchestrator
+    let bind_addr = SocketAddr::from(([0, 0, 0, 0], 9876));
+    orchestrator.initialize_quic_transport(bind_addr).await?;
+    info!("QUIC transport initialized on port 9876");
     
-    let mut quic_server = QuicServer::new(identity.clone(), verifier.clone(), quic_config);
-    quic_server.start().await?;
-    info!("QUIC server listening on port 9876");
+    // Create channels for QUIC<->orchestrator communication (kept for compatibility)
+    let (quic_tx, _quic_rx) = mpsc::channel::<QuicMessage>(100);
     
-    // Create channels for QUIC<->orchestrator communication
-    let (quic_tx, mut quic_rx) = mpsc::channel::<QuicMessage>(100);
-    let tx_for_quic = tx.clone();
-    
-    // Spawn QUIC connection handler
-    let quic_server_arc = Arc::new(tokio::sync::RwLock::new(quic_server));
-    let quic_handle = tokio::spawn({
-        let quic_server = quic_server_arc.clone();
-        let store = store.clone();
-        let indexer = indexer.clone();
-        async move {
-            loop {
-                match quic_server.read().await.accept().await {
-                    Ok(connection) => {
-                        info!("New QUIC connection accepted");
-                        // Handle connection in separate task
-                        tokio::spawn(handle_quic_connection(
-                            connection,
-                            store.clone(),
-                            indexer.clone(),
-                            quic_tx.clone(),
-                        ));
-                    }
-                    Err(e) => {
-                        error!("Failed to accept QUIC connection: {}", e);
-                        break;
-                    }
-                }
-            }
-        }
-    });
+    // Note: QUIC connection acceptance is now handled internally by the orchestrator
+    // The orchestrator's run() method includes the QUIC accept loop
 
     // Set up callbacks for integration with network layer
     let quic_tx_clone = quic_tx.clone();
@@ -295,15 +306,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Wait for orchestrator to finish
     orchestrator_handle.await?;
 
-    // Stop QUIC server
-    {
-        let mut server = quic_server_arc.write().await;
-        server.stop();
-    }
-    
     // Abort async tasks
     discovery_handle.abort();
-    quic_handle.abort();
+    // Note: QUIC server is now stopped as part of orchestrator shutdown
 
     info!("Daemon shutdown complete");
     Ok(())

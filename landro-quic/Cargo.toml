@@ -13,6 +13,8 @@ categories = ["network-programming", "asynchronous"]
 [dependencies]
 landro-crypto = { path = "../landro-crypto" }
 landro-proto = { path = "../landro-proto" }
+landro-cas = { path = "../landro-cas" }
+landro-chunker = { path = "../landro-chunker" }
 
 quinn = { workspace = true }
 rustls = { workspace = true }
@@ -31,6 +33,14 @@ blake3 = { workspace = true }
 rand = "0.8"
 async-trait = "0.1"
 memmap2 = "0.9"
+argon2 = "0.5"
+subtle = "2.5"
+chacha20poly1305 = { workspace = true }
+ed25519-dalek = { workspace = true }
+x25519-dalek = { workspace = true }
+zeroize = { workspace = true }
+uuid = { version = "1.0", features = ["v4"] }
+lru = "0.12"
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -13,9 +13,12 @@ use tracing::{debug, error, info, warn};
 
 use crate::discovery::PeerInfo;
 use crate::watcher::{FileEvent, FileEventKind};
+use crate::network::{ConnectionManager, NetworkConfig};
 use landro_cas::ContentStore;
 use landro_chunker::Chunker;
 use landro_index::async_indexer::AsyncIndexer;
+use landro_quic::{QuicServer, QuicConfig, Connection};
+use landro_crypto::{DeviceIdentity, CertificateVerifier};
 
 /// Messages that can be sent to the orchestrator
 #[derive(Debug)]
@@ -110,6 +113,12 @@ pub struct SyncOrchestrator {
     chunker: Arc<Chunker>,
     indexer: Arc<AsyncIndexer>,
 
+    // Network components
+    connection_manager: Option<Arc<ConnectionManager>>,
+    quic_server: Option<Arc<tokio::sync::RwLock<QuicServer>>>,
+    device_identity: Arc<DeviceIdentity>,
+    certificate_verifier: Arc<CertificateVerifier>,
+
     // Callbacks for external integration
     on_peer_sync_needed: Option<Arc<dyn Fn(String, Vec<PathBuf>) + Send + Sync>>,
     on_manifest_ready: Option<Arc<dyn Fn(PathBuf) + Send + Sync>>,
@@ -127,6 +136,182 @@ pub struct SyncOrchestrator {
 }
 
 impl SyncOrchestrator {
+    /// Initialize QUIC server and connection manager
+    pub async fn initialize_quic_transport(&mut self, bind_addr: std::net::SocketAddr) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("Initializing QUIC transport on {}", bind_addr);
+        
+        // Configure QUIC for file sync workloads
+        let quic_config = QuicConfig::file_sync_optimized()
+            .bind_addr(bind_addr)
+            .idle_timeout(Duration::from_secs(300))
+            .stream_receive_window(128 * 1024 * 1024)  // 128MB for large chunks
+            .receive_window(2 * 1024 * 1024 * 1024);   // 2GB for bulk transfers
+        
+        // Create and start QUIC server
+        let mut quic_server = QuicServer::new(
+            self.device_identity.clone(),
+            self.certificate_verifier.clone(),
+            quic_config.clone(),
+        );
+        quic_server.start().await?;
+        self.quic_server = Some(Arc::new(tokio::sync::RwLock::new(quic_server)));
+        
+        // Create connection manager for outbound connections
+        let discovery = crate::discovery::DiscoveryService::new(&whoami::devicename())?;
+        let network_config = NetworkConfig {
+            max_connections_per_peer: 4,  // More connections for parallel transfers
+            connection_idle_timeout: Duration::from_secs(300),
+            health_check_interval: Duration::from_secs(30),
+            ..Default::default()
+        };
+        
+        let connection_manager = Arc::new(ConnectionManager::new(
+            self.device_identity.clone(),
+            self.certificate_verifier.clone(),
+            Arc::new(tokio::sync::Mutex::new(discovery)),
+            network_config,
+        ));
+        
+        connection_manager.start().await?;
+        self.connection_manager = Some(connection_manager);
+        
+        info!("QUIC transport initialized successfully");
+        Ok(())
+    }
+
+    /// Handle incoming QUIC connection
+    pub async fn handle_incoming_connection(&self, connection: Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("Handling incoming QUIC connection from {}", connection.remote_address());
+        
+        // Perform protocol handshake
+        connection.receive_hello().await?;
+        connection.send_hello(
+            self.device_identity.device_id_bytes(),
+            &self.device_identity.device_name(),
+        ).await?;
+        
+        // Spawn handler for this connection
+        let store = self.store.clone();
+        let indexer = self.indexer.clone();
+        let chunker = self.chunker.clone();
+        
+        tokio::spawn(async move {
+            if let Err(e) = Self::handle_connection_streams(connection, store, indexer, chunker).await {
+                error!("Error handling connection streams: {}", e);
+            }
+        });
+        
+        Ok(())
+    }
+    
+    /// Handle streams on an established connection
+    async fn handle_connection_streams(
+        connection: Connection,
+        store: Arc<ContentStore>,
+        _indexer: Arc<AsyncIndexer>,
+        _chunker: Arc<Chunker>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        loop {
+            tokio::select! {
+                // Accept bidirectional streams for data transfer
+                result = connection.accept_bi() => {
+                    match result {
+                        Ok((send, recv)) => {
+                            // Handle data transfer stream
+                            let store_clone = store.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = Self::handle_data_stream(send, recv, store_clone).await {
+                                    error!("Error handling data stream: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            warn!("Error accepting bidirectional stream: {}", e);
+                            break;
+                        }
+                    }
+                }
+                
+                // Accept unidirectional streams for control messages
+                result = connection.accept_uni() => {
+                    match result {
+                        Ok(recv) => {
+                            // Handle control stream
+                            tokio::spawn(async move {
+                                if let Err(e) = Self::handle_control_stream(recv).await {
+                                    error!("Error handling control stream: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            warn!("Error accepting unidirectional stream: {}", e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Handle data transfer stream
+    async fn handle_data_stream(
+        mut send: quinn::SendStream,
+        mut recv: quinn::RecvStream,
+        store: Arc<ContentStore>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        
+        // Read chunk request
+        let mut len_buf = [0u8; 4];
+        recv.read_exact(&mut len_buf).await?;
+        let chunk_hash_len = u32::from_be_bytes(len_buf) as usize;
+        
+        let mut chunk_hash = vec![0u8; chunk_hash_len];
+        recv.read_exact(&mut chunk_hash).await?;
+        
+        // Retrieve chunk from store
+        let hash = landro_cas::Hash::from_bytes(&chunk_hash)?;
+        let chunk_data = store.read(&hash).await?;
+        
+        // Send chunk data
+        let len_bytes = (chunk_data.len() as u32).to_be_bytes();
+        send.write_all(&len_bytes).await?;
+        send.write_all(&chunk_data).await?;
+        send.finish()?;
+        
+        debug!("Sent chunk {} ({} bytes)", hex::encode(&chunk_hash), chunk_data.len());
+        Ok(())
+    }
+    
+    /// Handle control stream
+    async fn handle_control_stream(
+        mut recv: quinn::RecvStream,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use tokio::io::AsyncReadExt;
+        
+        // Read control message type
+        let mut msg_type = [0u8; 1];
+        recv.read_exact(&mut msg_type).await?;
+        
+        match msg_type[0] {
+            0 => {
+                // Manifest exchange
+                debug!("Received manifest request");
+            }
+            1 => {
+                // Sync status
+                debug!("Received sync status");
+            }
+            _ => {
+                warn!("Unknown control message type: {}", msg_type[0]);
+            }
+        }
+        
+        Ok(())
+    }
+
     /// Set the callback for when peer sync is needed
     pub fn set_peer_sync_callback<F>(&mut self, callback: F)
     where
@@ -154,6 +339,11 @@ impl SyncOrchestrator {
     {
         let (sender, receiver) = mpsc::channel(1000);
 
+        // Load or generate device identity
+        let device_name = whoami::devicename();
+        let device_identity = Arc::new(DeviceIdentity::load_or_generate(&device_name).await?);
+        let certificate_verifier = Arc::new(CertificateVerifier::for_pairing());
+
         // Callbacks will be set after creation
 
         let orchestrator = Self {
@@ -163,6 +353,10 @@ impl SyncOrchestrator {
             store,
             chunker,
             indexer,
+            connection_manager: None,
+            quic_server: None,
+            device_identity,
+            certificate_verifier,
             on_peer_sync_needed: None,
             on_manifest_ready: None,
             synced_folders: Vec::new(),
@@ -183,6 +377,48 @@ impl SyncOrchestrator {
 
         let mut debounce_interval = interval(self.config.debounce_duration);
         let mut retry_interval = interval(Duration::from_secs(30));
+        let mut quic_accept_task = None;
+
+        // Start accepting QUIC connections if server is initialized
+        if let Some(ref server) = self.quic_server {
+            let server_clone = server.clone();
+            let store = self.store.clone();
+            let indexer = self.indexer.clone();
+            let chunker = self.chunker.clone();
+            let identity = self.device_identity.clone();
+            
+            quic_accept_task = Some(tokio::spawn(async move {
+                loop {
+                    match server_clone.read().await.accept().await {
+                        Ok(connection) => {
+                            let conn = Connection::new(connection);
+                            let store_clone = store.clone();
+                            let indexer_clone = indexer.clone();
+                            let chunker_clone = chunker.clone();
+                            let identity_clone = identity.clone();
+                            
+                            tokio::spawn(async move {
+                                // Handle connection with proper error recovery
+                                if let Err(e) = Self::handle_incoming_connection_with_recovery(
+                                    conn, 
+                                    store_clone, 
+                                    indexer_clone, 
+                                    chunker_clone,
+                                    identity_clone
+                                ).await {
+                                    error!("Failed to handle incoming connection: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to accept QUIC connection: {}", e);
+                            // Don't break on error, continue accepting
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                    }
+                }
+            }));
+        }
 
         loop {
             tokio::select! {
@@ -190,8 +426,17 @@ impl SyncOrchestrator {
                 msg = self.receiver.recv() => {
                     match msg {
                         Some(message) => {
-                            if !self.handle_message(message).await? {
-                                break; // Shutdown requested
+                            // Wrap message handling with error recovery
+                            match self.handle_message_with_recovery(message).await {
+                                Ok(should_continue) => {
+                                    if !should_continue {
+                                        break; // Shutdown requested
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Error handling message: {}", e);
+                                    // Continue running despite errors
+                                }
                             }
                         }
                         None => {
@@ -203,19 +448,105 @@ impl SyncOrchestrator {
 
                 // Process debounced file changes
                 _ = debounce_interval.tick() => {
-                    self.process_debounced_changes().await?;
+                    if let Err(e) = self.process_debounced_changes().await {
+                        error!("Error processing debounced changes: {}", e);
+                        // Continue running
+                    }
                 }
 
                 // Retry failed operations
                 _ = retry_interval.tick() => {
-                    self.retry_failed_operations().await?;
+                    if let Err(e) = self.retry_failed_operations().await {
+                        error!("Error retrying failed operations: {}", e);
+                        // Continue running
+                    }
                 }
             }
+        }
+
+        // Clean up QUIC accept task
+        if let Some(task) = quic_accept_task {
+            task.abort();
         }
 
         info!("Sync orchestrator shutting down");
         self.shutdown().await?;
         Ok(())
+    }
+
+    /// Handle incoming connection with error recovery
+    async fn handle_incoming_connection_with_recovery(
+        connection: Connection,
+        store: Arc<ContentStore>,
+        indexer: Arc<AsyncIndexer>,
+        chunker: Arc<Chunker>,
+        identity: Arc<DeviceIdentity>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Perform handshake with timeout
+        match timeout(Duration::from_secs(10), connection.receive_hello()).await {
+            Ok(Ok(_)) => {
+                // Send our hello
+                if let Err(e) = connection.send_hello(
+                    identity.device_id_bytes(),
+                    &identity.device_name(),
+                ).await {
+                    error!("Failed to send hello: {}", e);
+                    connection.close(1, b"handshake_failed");
+                    return Err(e.into());
+                }
+            }
+            Ok(Err(e)) => {
+                error!("Failed to receive hello: {}", e);
+                connection.close(1, b"handshake_failed");
+                return Err(e.into());
+            }
+            Err(_) => {
+                error!("Handshake timeout");
+                connection.close(2, b"handshake_timeout");
+                return Err("Handshake timeout".into());
+            }
+        }
+        
+        // Handle connection streams
+        Self::handle_connection_streams(connection, store, indexer, chunker).await
+    }
+
+    /// Handle message with error recovery
+    async fn handle_message_with_recovery(
+        &mut self,
+        message: OrchestratorMessage,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        // Add retry logic for critical operations
+        match message {
+            OrchestratorMessage::PeerDiscovered(ref peer) => {
+                // Retry peer connection with exponential backoff
+                let mut retry_count = 0;
+                let max_retries = 3;
+                
+                while retry_count < max_retries {
+                    match self.handle_message(message.clone()).await {
+                        Ok(result) => return Ok(result),
+                        Err(e) => {
+                            retry_count += 1;
+                            if retry_count < max_retries {
+                                let backoff = Duration::from_millis(100 * (1 << retry_count));
+                                warn!("Failed to handle peer discovery (attempt {}/{}): {}, retrying in {:?}", 
+                                      retry_count, max_retries, e, backoff);
+                                tokio::time::sleep(backoff).await;
+                            } else {
+                                error!("Failed to handle peer discovery after {} attempts: {}", max_retries, e);
+                                return Err(e);
+                            }
+                        }
+                    }
+                }
+                Ok(true)
+            }
+            _ => {
+                // For other messages, use single attempt
+                self.handle_message(message).await
+            }
+        }
     }
 
     /// Handle a single message
@@ -409,9 +740,22 @@ impl SyncOrchestrator {
             peer.device_name
         );
 
-        // If we have folders to sync, notify about the new peer
+        // If we have folders to sync and QUIC is initialized, establish connection
         if !self.synced_folders.is_empty() && self.config.auto_sync {
-            if let Some(ref callback) = self.on_peer_sync_needed {
+            if let Some(ref conn_mgr) = self.connection_manager {
+                // Try to establish connection to the peer
+                match conn_mgr.get_connection(&peer.device_id).await {
+                    Ok(connection) => {
+                        info!("Established QUIC connection to peer {}", peer.device_name);
+                        // Trigger sync through the connection
+                        self.initiate_sync_with_peer(&peer.device_id, connection).await?;
+                    }
+                    Err(e) => {
+                        warn!("Failed to connect to peer {}: {}", peer.device_name, e);
+                    }
+                }
+            } else if let Some(ref callback) = self.on_peer_sync_needed {
+                // Fallback to callback if QUIC not initialized
                 callback(peer.device_id.clone(), self.synced_folders.clone());
             }
         }
@@ -466,6 +810,37 @@ impl SyncOrchestrator {
         Ok(())
     }
 
+    /// Initiate sync with a specific peer through QUIC
+    async fn initiate_sync_with_peer(
+        &self,
+        peer_id: &str,
+        connection: Arc<Connection>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("Initiating sync with peer {} via QUIC", peer_id);
+        
+        // Open control stream for sync negotiation
+        let mut control_stream = connection.open_uni().await?;
+        
+        // Send sync request for each folder
+        for folder in &self.synced_folders {
+            // Build manifest for this folder
+            let manifest = self.indexer.build_manifest(folder).await?;
+            
+            // Serialize manifest (using a simple format for now)
+            let manifest_data = serde_json::to_vec(&manifest)?;
+            
+            // Send sync request message
+            use tokio::io::AsyncWriteExt;
+            control_stream.write_all(&[1u8]).await?; // Message type: sync request
+            control_stream.write_all(&(manifest_data.len() as u32).to_be_bytes()).await?;
+            control_stream.write_all(&manifest_data).await?;
+        }
+        
+        control_stream.finish()?;
+        
+        Ok(())
+    }
+
     /// Trigger auto-sync with all connected peers
     async fn trigger_auto_sync(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         debug!(
@@ -473,9 +848,23 @@ impl SyncOrchestrator {
             self.active_peers.len()
         );
 
-        // Notify about sync needed for each peer
-        for peer_id in self.active_peers.keys() {
-            if let Some(ref callback) = self.on_peer_sync_needed {
+        // Use QUIC connections if available
+        if let Some(ref conn_mgr) = self.connection_manager {
+            for (peer_id, _peer_info) in &self.active_peers {
+                match conn_mgr.get_connection(peer_id).await {
+                    Ok(connection) => {
+                        if let Err(e) = self.initiate_sync_with_peer(peer_id, connection).await {
+                            error!("Failed to sync with {}: {}", peer_id, e);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to get connection to {}: {}", peer_id, e);
+                    }
+                }
+            }
+        } else if let Some(ref callback) = self.on_peer_sync_needed {
+            // Fallback to callback
+            for peer_id in self.active_peers.keys() {
                 callback(peer_id.clone(), self.synced_folders.clone());
             }
         }
@@ -540,32 +929,47 @@ impl SyncOrchestrator {
         // Index the folder to build manifest
         self.indexer.index_folder(path).await?;
 
-        // Walk the directory and process files
-        let mut entries = tokio::fs::read_dir(path).await?;
-        let mut file_count = 0;
+        // Use iterative approach with a stack to avoid recursion
+        let mut dir_stack = vec![path.clone()];
+        let mut total_file_count = 0;
 
-        while let Some(entry) = entries.next_entry().await? {
-            let entry_path = entry.path();
+        while let Some(current_dir) = dir_stack.pop() {
+            let mut entries = tokio::fs::read_dir(&current_dir).await?;
+            let mut file_count = 0;
 
-            if entry_path.is_file() {
-                // Process individual file
-                if let Err(e) = self
-                    .process_single_file_internal(&entry_path, FileOperation::Create)
-                    .await
-                {
-                    error!("Failed to process file {}: {}", entry_path.display(), e);
-                } else {
-                    file_count += 1;
+            while let Some(entry) = entries.next_entry().await? {
+                let entry_path = entry.path();
+                let metadata = entry.metadata().await?;
+
+                if metadata.is_file() {
+                    // Process individual file
+                    if let Err(e) = self
+                        .process_single_file_internal(&entry_path, FileOperation::Create)
+                        .await
+                    {
+                        error!("Failed to process file {}: {}", entry_path.display(), e);
+                    } else {
+                        file_count += 1;
+                    }
+                } else if metadata.is_dir() {
+                    // Add subdirectory to stack for processing
+                    dir_stack.push(entry_path);
                 }
-            } else if entry_path.is_dir() {
-                // Recursively process subdirectory
-                Box::pin(self.process_folder_for_sync(&entry_path)).await?;
             }
+
+            if file_count > 0 {
+                debug!(
+                    "Processed {} files in directory {}",
+                    file_count,
+                    current_dir.display()
+                );
+            }
+            total_file_count += file_count;
         }
 
         info!(
-            "Processed {} files in folder {}",
-            file_count,
+            "Processed {} total files in folder {}",
+            total_file_count,
             path.display()
         );
 
@@ -590,37 +994,8 @@ impl SyncOrchestrator {
                     self.current_operations
                         .push(format!("Processing: {}", path.display()));
 
-                    // Read file in chunks to avoid memory issues
-                    let file = tokio::fs::File::open(path).await?;
-                    let metadata = file.metadata().await?;
-                    let file_size = metadata.len();
-
-                    // For large files, use streaming
-                    if file_size > 100 * 1024 * 1024 {
-                        // 100MB threshold
-                        self.process_large_file(path).await?;
-                    } else {
-                        // Small file - process normally
-                        let content = tokio::fs::read(path).await?;
-
-                        // Chunk the file
-                        let chunks = self.chunker.chunk_bytes(&content)?;
-                        debug!(
-                            "File {} chunked into {} pieces",
-                            path.display(),
-                            chunks.len()
-                        );
-
-                        // Store chunks in CAS
-                        let mut stored_hashes = Vec::new();
-                        for chunk in &chunks {
-                            let obj_ref = self.store.write(&chunk.data).await?;
-                            stored_hashes.push(obj_ref.hash);
-                        }
-
-                        // Track bytes synced
-                        self.total_bytes_synced += file_size;
-                    }
+                    // Always use streaming to avoid memory issues
+                    self.process_file_streaming(path).await?;
 
                     // Update index - index parent folder to include this file
                     if let Some(parent) = path.parent() {
@@ -642,40 +1017,74 @@ impl SyncOrchestrator {
         Ok(())
     }
 
-    /// Process large files with streaming
-    async fn process_large_file(
+    /// Process files with streaming to avoid loading entire file into memory
+    async fn process_file_streaming(
         &mut self,
         path: &PathBuf,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use tokio::io::AsyncReadExt;
 
-        info!("Processing large file with streaming: {}", path.display());
+        debug!("Processing file with streaming: {}", path.display());
 
-        let mut file = tokio::fs::File::open(path).await?;
-        let mut buffer = vec![0u8; 4 * 1024 * 1024]; // 4MB chunks
+        let file = tokio::fs::File::open(path).await?;
+        let metadata = file.metadata().await?;
+        let file_size = metadata.len();
+        
+        let mut file = file;
+        // Use a rolling buffer approach - read in chunks that overlap
+        // to ensure we don't miss chunk boundaries
+        let read_size = 1024 * 1024; // 1MB read buffer
+        let mut buffer = Vec::with_capacity(read_size * 2);
         let mut total_chunks = 0;
+        let mut file_offset = 0u64;
 
         loop {
-            let bytes_read = file.read(&mut buffer).await?;
+            // Read next chunk from file
+            let mut temp_buffer = vec![0u8; read_size];
+            let bytes_read = file.read(&mut temp_buffer).await?;
+            
             if bytes_read == 0 {
+                // Process any remaining data
+                if !buffer.is_empty() {
+                    let chunks = self.chunker.chunk_bytes(&buffer)?;
+                    for chunk in chunks {
+                        self.store.write(&chunk.data).await?;
+                        total_chunks += 1;
+                    }
+                }
                 break;
             }
 
-            let data = &buffer[..bytes_read];
-
-            // Chunk this segment
-            let chunks = self.chunker.chunk_bytes(data)?;
-
-            // Store chunks
-            for chunk in chunks {
-                self.store.write(&chunk.data).await?;
-                total_chunks += 1;
+            // Add new data to buffer
+            buffer.extend_from_slice(&temp_buffer[..bytes_read]);
+            
+            // Process buffer when it's large enough
+            // Keep some data for overlap to catch boundaries
+            if buffer.len() >= self.config.max_concurrent_chunks * 256 * 1024 {
+                // Process most of the buffer, keeping last part for overlap
+                let process_size = buffer.len() - (256 * 1024); // Keep 256KB for overlap
+                let data_to_process = &buffer[..process_size];
+                
+                let chunks = self.chunker.chunk_bytes(data_to_process)?;
+                for chunk in chunks {
+                    self.store.write(&chunk.data).await?;
+                    total_chunks += 1;
+                }
+                
+                // Keep the unprocessed tail
+                buffer.drain(..process_size);
             }
+            
+            file_offset += bytes_read as u64;
         }
 
-        info!(
-            "Large file {} processed into {} chunks",
+        // Track bytes synced
+        self.total_bytes_synced += file_size;
+
+        debug!(
+            "File {} processed: {} bytes into {} chunks",
             path.display(),
+            file_size,
             total_chunks
         );
         Ok(())

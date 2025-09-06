@@ -1,11 +1,16 @@
 use blake3::Hasher;
 use bytes::Bytes;
+use lru::LruCache;
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::fs::{self, File};
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, trace, warn};
+use tokio::sync::{Mutex, RwLock, Semaphore};
+use tracing::{debug, trace, warn, error};
 
 use crate::errors::{CasError, Result};
 use crate::packfile::{PackfileConfig, PackfileManager};
@@ -26,13 +31,16 @@ pub enum FsyncPolicy {
 }
 
 /// Compression algorithm selection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum CompressionType {
     /// No compression
     None,
-    // Future compression algorithms can be added here
-    // Lz4,
-    // Zstd,
+    /// LZ4 compression (fast)
+    Lz4,
+    /// Zstd compression (balanced)
+    Zstd { level: i32 },
+    /// Snappy compression (very fast)
+    Snappy,
 }
 
 /// Configuration options for the content store.
@@ -48,6 +56,31 @@ pub struct ContentStoreConfig {
     pub packfile_config: PackfileConfig,
     /// Enable packfile storage for small objects
     pub enable_packfiles: bool,
+    /// Cache configuration
+    pub cache_config: CacheConfig,
+    /// Enable batch operations
+    pub enable_batch_ops: bool,
+    /// Maximum concurrent operations
+    pub max_concurrent_ops: usize,
+    /// Enable background integrity scanning
+    pub enable_background_scan: bool,
+    /// Background scan interval in seconds
+    pub scan_interval_secs: u64,
+}
+
+/// Cache configuration for the content store
+#[derive(Debug, Clone)]
+pub struct CacheConfig {
+    /// Maximum number of cached chunks
+    pub max_chunks: usize,
+    /// Maximum total size of cached data (bytes)
+    pub max_size_bytes: u64,
+    /// Cache TTL in seconds
+    pub ttl_seconds: u64,
+    /// Enable adaptive caching based on access patterns
+    pub adaptive_caching: bool,
+    /// Prefetch related chunks
+    pub prefetch_enabled: bool,
 }
 
 impl Default for ContentStoreConfig {
@@ -58,6 +91,23 @@ impl Default for ContentStoreConfig {
             compression: CompressionType::None,
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disabled by default for v1.0 - focusing on individual file storage
+            cache_config: CacheConfig::default(),
+            enable_batch_ops: true,
+            max_concurrent_ops: 32,
+            enable_background_scan: false,
+            scan_interval_secs: 3600, // 1 hour
+        }
+    }
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            max_chunks: 10000,
+            max_size_bytes: 512 * 1024 * 1024, // 512MB
+            ttl_seconds: 300, // 5 minutes
+            adaptive_caching: true,
+            prefetch_enabled: true,
         }
     }
 }
@@ -115,11 +165,173 @@ pub struct ObjectRef {
 /// # Ok(())
 /// # }
 /// ```
+/// Cached chunk data with metadata
+#[derive(Clone)]
+struct CachedChunk {
+    data: Bytes,
+    size: u64,
+    last_accessed: Instant,
+    access_count: u32,
+}
+
+/// Chunk cache for hot data
+struct ChunkCache {
+    chunks: LruCache<ContentHash, CachedChunk>,
+    total_size: u64,
+    hit_count: AtomicU64,
+    miss_count: AtomicU64,
+    eviction_count: AtomicU64,
+}
+
+impl ChunkCache {
+    fn new(max_chunks: usize) -> Self {
+        Self {
+            chunks: LruCache::new(NonZeroUsize::new(max_chunks).unwrap()),
+            total_size: 0,
+            hit_count: AtomicU64::new(0),
+            miss_count: AtomicU64::new(0),
+            eviction_count: AtomicU64::new(0),
+        }
+    }
+
+    fn hit_rate(&self) -> f64 {
+        let hits = self.hit_count.load(Ordering::Relaxed) as f64;
+        let misses = self.miss_count.load(Ordering::Relaxed) as f64;
+        if hits + misses == 0.0 {
+            0.0
+        } else {
+            hits / (hits + misses)
+        }
+    }
+}
+
+/// Batch write accumulator
+struct BatchWriter {
+    pending: Vec<(ContentHash, Bytes)>,
+    total_size: usize,
+    last_flush: Instant,
+}
+
+impl BatchWriter {
+    fn new() -> Self {
+        Self {
+            pending: Vec::with_capacity(100),
+            total_size: 0,
+            last_flush: Instant::now(),
+        }
+    }
+
+    fn should_flush(&self) -> bool {
+        self.pending.len() >= 100 ||
+        self.total_size >= 10 * 1024 * 1024 || // 10MB
+        self.last_flush.elapsed() >= Duration::from_millis(100)
+    }
+}
+
 pub struct ContentStore {
     root_path: PathBuf,
     config: ContentStoreConfig,
     pending_syncs: Arc<AtomicU32>,
-    packfile_manager: Option<PackfileManager>,
+    packfile_manager: Option<Arc<Mutex<PackfileManager>>>,
+    cache: Arc<RwLock<ChunkCache>>,
+    batch_writer: Arc<Mutex<BatchWriter>>,
+    write_semaphore: Arc<Semaphore>,
+    dedup_index: Arc<RwLock<HashMap<ContentHash, ObjectRef>>>,
+    stats: ContentStoreRuntimeStats,
+}
+
+impl std::fmt::Debug for ContentStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Security-conscious debug implementation
+        // Only expose safe, non-sensitive operational information
+        f.debug_struct("ContentStore")
+            .field("storage_root", &format!("{}/**", self.root_path.file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or("unknown".into())))
+            .field("fsync_policy", &self.config.fsync_policy)
+            .field("compression", &self.config.compression)
+            .field("packfiles_enabled", &self.config.enable_packfiles)
+            .field("batch_ops_enabled", &self.config.enable_batch_ops)
+            .field("max_concurrent_ops", &self.config.max_concurrent_ops)
+            .field("pending_syncs", &self.pending_syncs.load(Ordering::Relaxed))
+            .field("background_scan_enabled", &self.config.enable_background_scan)
+            // Expose safe runtime statistics without sensitive data
+            .field("total_writes", &self.stats.writes.load(Ordering::Relaxed))
+            .field("total_reads", &self.stats.reads.load(Ordering::Relaxed))
+            .field("cache_hits", &self.stats.cache_hits.load(Ordering::Relaxed))
+            .field("cache_misses", &self.stats.cache_misses.load(Ordering::Relaxed))
+            .field("dedup_hits", &self.stats.dedup_hits.load(Ordering::Relaxed))
+            .field("batch_flushes", &self.stats.batch_flushes.load(Ordering::Relaxed))
+            .finish()
+    }
+}
+
+/// Runtime statistics for the content store
+#[derive(Debug)]
+struct ContentStoreRuntimeStats {
+    writes: AtomicU64,
+    reads: AtomicU64,
+    bytes_written: AtomicU64,
+    bytes_read: AtomicU64,
+    objects_packed: AtomicU64,
+    verifications: AtomicU64,
+    corruptions_found: AtomicU64,
+    cache_hits: AtomicU64,
+    cache_misses: AtomicU64,
+    batch_flushes: AtomicU64,
+    dedup_hits: AtomicU64,
+}
+
+impl Default for ContentStoreRuntimeStats {
+    fn default() -> Self {
+        Self {
+            writes: AtomicU64::new(0),
+            reads: AtomicU64::new(0),
+            bytes_written: AtomicU64::new(0),
+            bytes_read: AtomicU64::new(0),
+            objects_packed: AtomicU64::new(0),
+            verifications: AtomicU64::new(0),
+            corruptions_found: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+            batch_flushes: AtomicU64::new(0),
+            dedup_hits: AtomicU64::new(0),
+        }
+    }
+}
+
+impl Clone for ContentStoreRuntimeStats {
+    fn clone(&self) -> Self {
+        Self {
+            writes: AtomicU64::new(self.writes.load(Ordering::Relaxed)),
+            reads: AtomicU64::new(self.reads.load(Ordering::Relaxed)),
+            bytes_written: AtomicU64::new(self.bytes_written.load(Ordering::Relaxed)),
+            bytes_read: AtomicU64::new(self.bytes_read.load(Ordering::Relaxed)),
+            objects_packed: AtomicU64::new(self.objects_packed.load(Ordering::Relaxed)),
+            verifications: AtomicU64::new(self.verifications.load(Ordering::Relaxed)),
+            corruptions_found: AtomicU64::new(self.corruptions_found.load(Ordering::Relaxed)),
+            cache_hits: AtomicU64::new(self.cache_hits.load(Ordering::Relaxed)),
+            cache_misses: AtomicU64::new(self.cache_misses.load(Ordering::Relaxed)),
+            batch_flushes: AtomicU64::new(self.batch_flushes.load(Ordering::Relaxed)),
+            dedup_hits: AtomicU64::new(self.dedup_hits.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+impl Clone for ContentStore {
+    fn clone(&self) -> Self {
+        Self {
+            root_path: self.root_path.clone(),
+            config: self.config.clone(),
+            pending_syncs: Arc::clone(&self.pending_syncs),
+            packfile_manager: self.packfile_manager.clone(),
+            cache: Arc::clone(&self.cache),
+            batch_writer: Arc::clone(&self.batch_writer),
+            write_semaphore: Arc::clone(&self.write_semaphore),
+            dedup_index: Arc::clone(&self.dedup_index),
+            stats: self.stats.clone(),
+        }
+    }
 }
 
 impl ContentStore {
@@ -171,10 +383,10 @@ impl ContentStore {
 
         // Initialize packfile manager if enabled
         let packfile_manager = if config.enable_packfiles {
-            Some(
+            Some(Arc::new(Mutex::new(
                 PackfileManager::new_with_config(&root_path, config.packfile_config.clone())
                     .await?,
-            )
+            )))
         } else {
             None
         };
@@ -184,6 +396,11 @@ impl ContentStore {
             config: config.clone(),
             pending_syncs: Arc::new(AtomicU32::new(0)),
             packfile_manager,
+            cache: Arc::new(RwLock::new(ChunkCache::new(config.cache_config.max_chunks))),
+            batch_writer: Arc::new(Mutex::new(BatchWriter::new())),
+            write_semaphore: Arc::new(Semaphore::new(config.max_concurrent_ops)),
+            dedup_index: Arc::new(RwLock::new(HashMap::new())),
+            stats: ContentStoreRuntimeStats::default(),
         };
 
         // Perform recovery if enabled
@@ -230,6 +447,207 @@ impl ContentStore {
         self.write(&data[..]).await
     }
 
+    /// Write multiple objects in a batch for improved performance
+    pub async fn write_batch(&self, chunks: Vec<(&[u8], Option<ContentHash>)>) -> Result<Vec<ObjectRef>> {
+        let mut results = Vec::with_capacity(chunks.len());
+        let mut batch = self.batch_writer.lock().await;
+        
+        for (data, expected_hash) in chunks {
+            // Validate object size
+            validation::validate_object_size(data.len())
+                .map_err(|e| CasError::InvalidOperation(format!("Object validation failed: {}", e)))?;
+            
+            // Calculate hash or use provided one
+            let hash = if let Some(h) = expected_hash {
+                h
+            } else {
+                let mut hasher = Hasher::new();
+                hasher.update(data);
+                ContentHash::from_blake3(hasher.finalize())
+            };
+            
+            // Check dedup index first
+            {
+                let dedup = self.dedup_index.read().await;
+                if let Some(obj_ref) = dedup.get(&hash) {
+                    self.stats.dedup_hits.fetch_add(1, Ordering::Relaxed);
+                    results.push(obj_ref.clone());
+                    continue;
+                }
+            }
+            
+            // Add to batch
+            batch.pending.push((hash, Bytes::from(data.to_vec())));
+            batch.total_size += data.len();
+            
+            results.push(ObjectRef {
+                hash,
+                size: data.len() as u64,
+            });
+        }
+        
+        // Flush if needed
+        if batch.should_flush() {
+            self.flush_batch_internal(&mut batch).await?;
+        }
+        
+        Ok(results)
+    }
+    
+    /// Flush pending batch writes
+    pub async fn flush_batch(&self) -> Result<()> {
+        let mut batch = self.batch_writer.lock().await;
+        if !batch.pending.is_empty() {
+            self.flush_batch_internal(&mut batch).await?;
+        }
+        Ok(())
+    }
+    
+    async fn flush_batch_internal(&self, batch: &mut BatchWriter) -> Result<()> {
+        if batch.pending.is_empty() {
+            return Ok(());
+        }
+        
+        debug!("Flushing batch of {} chunks ({} bytes)", batch.pending.len(), batch.total_size);
+        self.stats.batch_flushes.fetch_add(1, Ordering::Relaxed);
+        
+        // Process all pending writes concurrently with semaphore limiting
+        let mut handles = Vec::new();
+        for (hash, data) in batch.pending.drain(..) {
+            let store = self.clone();
+            let permit = self.write_semaphore.clone().acquire_owned().await;
+            
+            let handle = tokio::spawn(async move {
+                let _permit = permit;
+                store.write_individual_optimized(&data, hash).await
+            });
+            handles.push(handle);
+        }
+        
+        // Wait for all writes to complete
+        for handle in handles {
+            handle.await.map_err(|e| CasError::Internal(format!("Batch write failed: {}", e)))??;
+        }
+        
+        batch.total_size = 0;
+        batch.last_flush = Instant::now();
+        
+        Ok(())
+    }
+    
+    /// Optimized individual write with compression support
+    async fn write_individual_optimized(&self, data: &[u8], hash: ContentHash) -> Result<ObjectRef> {
+        let object_path = self.object_path(&hash);
+        
+        // Check if already exists
+        if object_path.exists() {
+            return Ok(ObjectRef {
+                hash,
+                size: data.len() as u64,
+            });
+        }
+        
+        // Compress if configured
+        let (compressed_data, was_compressed) = self.compress_data(data)?;
+        let data_to_write = if was_compressed { &compressed_data } else { data };
+        
+        // Ensure shard directories exist
+        if let Some(parent) = object_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        
+        self.write_atomic(&object_path, data_to_write, &hash).await?;
+        
+        // Update cache
+        {
+            let mut cache = self.cache.write().await;
+            let cached = CachedChunk {
+                data: Bytes::from(data.to_vec()),
+                size: data.len() as u64,
+                last_accessed: Instant::now(),
+                access_count: 1,
+            };
+            
+            // Evict if necessary
+            while cache.total_size + cached.size > self.config.cache_config.max_size_bytes {
+                if let Some((_, evicted)) = cache.chunks.pop_lru() {
+                    cache.total_size -= evicted.size;
+                    cache.eviction_count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            
+            cache.chunks.put(hash, cached.clone());
+            cache.total_size += cached.size;
+        }
+        
+        // Update dedup index
+        {
+            let mut dedup = self.dedup_index.write().await;
+            dedup.insert(hash, ObjectRef {
+                hash,
+                size: data.len() as u64,
+            });
+        }
+        
+        self.stats.writes.fetch_add(1, Ordering::Relaxed);
+        self.stats.bytes_written.fetch_add(data.len() as u64, Ordering::Relaxed);
+        
+        Ok(ObjectRef {
+            hash,
+            size: data.len() as u64,
+        })
+    }
+    
+    /// Compress data using configured algorithm
+    fn compress_data(&self, data: &[u8]) -> Result<(Vec<u8>, bool)> {
+        match self.config.compression {
+            CompressionType::None => Ok((vec![], false)),
+            CompressionType::Lz4 => {
+                // Use lz4_flex for compression
+                Ok((lz4_flex::compress_prepend_size(data), true))
+            }
+            CompressionType::Zstd { level } => {
+                // Use zstd for compression
+                match zstd::encode_all(data, level) {
+                    Ok(compressed) => Ok((compressed, true)),
+                    Err(e) => Err(CasError::Internal(format!("Compression failed: {}", e))),
+                }
+            }
+            CompressionType::Snappy => {
+                // Use snap for compression
+                let mut encoder = snap::raw::Encoder::new();
+                match encoder.compress_vec(data) {
+                    Ok(compressed) => Ok((compressed, true)),
+                    Err(e) => Err(CasError::Internal(format!("Compression failed: {}", e))),
+                }
+            }
+        }
+    }
+    
+    /// Decompress data using configured algorithm
+    fn decompress_data(&self, data: &[u8], compressed: bool) -> Result<Vec<u8>> {
+        if !compressed {
+            return Ok(data.to_vec());
+        }
+        
+        match self.config.compression {
+            CompressionType::None => Ok(data.to_vec()),
+            CompressionType::Lz4 => {
+                lz4_flex::decompress_size_prepended(data)
+                    .map_err(|e| CasError::Internal(format!("Decompression failed: {}", e)))
+            }
+            CompressionType::Zstd { .. } => {
+                zstd::decode_all(data)
+                    .map_err(|e| CasError::Internal(format!("Decompression failed: {}", e)))
+            }
+            CompressionType::Snappy => {
+                let mut decoder = snap::raw::Decoder::new();
+                decoder.decompress_vec(data)
+                    .map_err(|e| CasError::Internal(format!("Decompression failed: {}", e)))
+            }
+        }
+    }
+
     /// Write an object to the content store.
     ///
     /// The object is written atomically using a temporary file and rename for large objects,
@@ -253,19 +671,37 @@ impl ContentStore {
         hasher.update(data);
         let hash = ContentHash::from_blake3(hasher.finalize());
 
+        // Check dedup index first (fast path)
+        {
+            let dedup = self.dedup_index.read().await;
+            if let Some(obj_ref) = dedup.get(&hash) {
+                self.stats.dedup_hits.fetch_add(1, Ordering::Relaxed);
+                trace!("Object {} found in dedup index", hash);
+                return Ok(obj_ref.clone());
+            }
+        }
+        
         // Check if object already exists (check both individual files and packfiles)
         if self.exists(&hash).await {
             trace!("Object {} already exists", hash);
-            return Ok(ObjectRef {
+            let obj_ref = ObjectRef {
                 hash,
                 size: data.len() as u64,
-            });
+            };
+            
+            // Update dedup index
+            let mut dedup = self.dedup_index.write().await;
+            dedup.insert(hash, obj_ref.clone());
+            
+            return Ok(obj_ref);
         }
 
         // Decide whether to use packfiles or individual storage
         if self.config.enable_packfiles {
             if let Some(ref manager) = self.packfile_manager {
-                if manager.should_pack(data.len() as u64) {
+                let manager_guard = manager.lock().await;
+                if manager_guard.should_pack(data.len() as u64) {
+                    drop(manager_guard);
                     return self.write_with_packing(data, hash).await;
                 }
             }
@@ -318,10 +754,10 @@ impl ContentStore {
         })
     }
 
-    /// Read an object from the content store.
+    /// Read an object from the content store with caching.
     ///
     /// The object's integrity is verified by recomputing its hash and checking
-    /// file metadata for consistency. Searches both individual files and packfiles.
+    /// file metadata for consistency. Searches cache first, then both individual files and packfiles.
     ///
     /// # Arguments
     ///
@@ -340,11 +776,32 @@ impl ContentStore {
         // Validate hash format
         validation::validate_content_hash(&hash.to_string())
             .map_err(|e| CasError::InvalidOperation(format!("Hash validation failed: {}", e)))?;
+        
+        // Check cache first
+        {
+            let mut cache = self.cache.write().await;
+            if let Some(cached) = cache.chunks.get_mut(hash) {
+                cached.last_accessed = Instant::now();
+                cached.access_count += 1;
+                let cached_data = cached.data.clone();
+                let cached_size = cached.size;
+                
+                cache.hit_count.fetch_add(1, Ordering::Relaxed);
+                self.stats.cache_hits.fetch_add(1, Ordering::Relaxed);
+                self.stats.reads.fetch_add(1, Ordering::Relaxed);
+                self.stats.bytes_read.fetch_add(cached_size, Ordering::Relaxed);
+                trace!("Cache hit for chunk {}", hash);
+                return Ok(cached_data);
+            }
+            cache.miss_count.fetch_add(1, Ordering::Relaxed);
+            self.stats.cache_misses.fetch_add(1, Ordering::Relaxed);
+        }
 
         // Try reading from packfiles first (they're likely to have small, frequently accessed objects)
         if self.config.enable_packfiles {
             if let Some(ref manager) = self.packfile_manager {
-                if let Ok(Some(data)) = manager.read_packed(hash).await {
+                let manager_guard = manager.lock().await;
+                if let Ok(Some(data)) = manager_guard.read_packed(hash).await {
                     trace!("Read object {} ({} bytes) from packfile", hash, data.len());
                     return Ok(data);
                 }
@@ -352,7 +809,34 @@ impl ContentStore {
         }
 
         // Fall back to individual file storage
-        self.read_individual(hash).await
+        let data = self.read_individual(hash).await?;
+        
+        // Update cache
+        {
+            let mut cache = self.cache.write().await;
+            let cached = CachedChunk {
+                data: data.clone(),
+                size: data.len() as u64,
+                last_accessed: Instant::now(),
+                access_count: 1,
+            };
+            
+            // Evict if necessary
+            while cache.total_size + cached.size > self.config.cache_config.max_size_bytes {
+                if let Some((_, evicted)) = cache.chunks.pop_lru() {
+                    cache.total_size -= evicted.size;
+                    cache.eviction_count.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            
+            cache.chunks.put(*hash, cached.clone());
+            cache.total_size += cached.size;
+        }
+        
+        self.stats.reads.fetch_add(1, Ordering::Relaxed);
+        self.stats.bytes_read.fetch_add(data.len() as u64, Ordering::Relaxed);
+        
+        Ok(data)
     }
 
     /// Read data from individual file storage (the original read logic)
@@ -419,7 +903,8 @@ impl ContentStore {
         // Check packfiles if enabled
         if self.config.enable_packfiles {
             if let Some(ref manager) = self.packfile_manager {
-                if let Ok(Some(_)) = manager.read_packed(hash).await {
+                let manager_guard = manager.lock().await;
+                if let Ok(Some(_)) = manager_guard.read_packed(hash).await {
                     return true;
                 }
             }
@@ -780,7 +1265,8 @@ impl ContentStore {
         // Add packfile statistics
         if self.config.enable_packfiles {
             if let Some(ref manager) = self.packfile_manager {
-                let packfile_stats = manager.stats();
+                let manager_guard = manager.lock().await;
+                let packfile_stats = manager_guard.stats();
                 object_count += packfile_stats.total_objects as u64;
                 total_size += packfile_stats.total_packed_size;
             }
@@ -890,24 +1376,134 @@ impl ContentStore {
     }
 
     /// Force flush any pending packfile operations
-    pub async fn flush_packfiles(&mut self) -> Result<()> {
-        if let Some(ref mut manager) = self.packfile_manager {
+    pub async fn flush_packfiles(&self) -> Result<()> {
+        if let Some(ref manager) = self.packfile_manager {
+            let mut manager = manager.lock().await;
             manager.flush_packfile().await?;
         }
         Ok(())
     }
 
     /// Finalize all packfile operations (useful for shutdown)
-    pub async fn finalize_packfiles(&mut self) -> Result<()> {
-        if let Some(ref mut manager) = self.packfile_manager {
+    pub async fn finalize_packfiles(&self) -> Result<()> {
+        if let Some(ref manager) = self.packfile_manager {
+            let mut manager = manager.lock().await;
             manager.finalize().await?;
         }
         Ok(())
     }
 
     /// Get packfile statistics if packfiles are enabled
-    pub fn packfile_stats(&self) -> Option<crate::packfile::PackfileStats> {
-        self.packfile_manager.as_ref().map(|m| m.stats())
+    pub async fn packfile_stats(&self) -> Option<crate::packfile::PackfileStats> {
+        if let Some(ref manager) = self.packfile_manager {
+            let manager = manager.lock().await;
+            Some(manager.stats())
+        } else {
+            None
+        }
+    }
+
+    /// Get runtime statistics for the content store
+    pub async fn runtime_stats(&self) -> ContentStoreStats {
+        let cache = self.cache.read().await;
+        ContentStoreStats {
+            total_writes: self.stats.writes.load(Ordering::Relaxed),
+            total_reads: self.stats.reads.load(Ordering::Relaxed),
+            bytes_written: self.stats.bytes_written.load(Ordering::Relaxed),
+            bytes_read: self.stats.bytes_read.load(Ordering::Relaxed),
+            objects_packed: self.stats.objects_packed.load(Ordering::Relaxed),
+            verifications_performed: self.stats.verifications.load(Ordering::Relaxed),
+            corruptions_found: self.stats.corruptions_found.load(Ordering::Relaxed),
+            cache_hits: self.stats.cache_hits.load(Ordering::Relaxed),
+            cache_misses: self.stats.cache_misses.load(Ordering::Relaxed),
+            cache_hit_rate: cache.hit_rate(),
+            batch_flushes: self.stats.batch_flushes.load(Ordering::Relaxed),
+            dedup_hits: self.stats.dedup_hits.load(Ordering::Relaxed),
+        }
+    }
+    
+    /// Prefetch chunks for improved performance
+    pub async fn prefetch(&self, hashes: &[ContentHash]) -> Result<()> {
+        if !self.config.cache_config.prefetch_enabled {
+            return Ok(());
+        }
+        
+        for hash in hashes {
+            // Check if already in cache
+            {
+                let cache = self.cache.read().await;
+                if cache.chunks.contains(hash) {
+                    continue;
+                }
+            }
+            
+            // Try to read and cache
+            match self.read(hash).await {
+                Ok(_) => trace!("Prefetched chunk {}", hash),
+                Err(e) => debug!("Failed to prefetch chunk {}: {}", hash, e),
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Clear the chunk cache
+    pub async fn clear_cache(&self) {
+        let mut cache = self.cache.write().await;
+        cache.chunks.clear();
+        cache.total_size = 0;
+        debug!("Cleared chunk cache");
+    }
+    
+    /// Get cache statistics
+    pub async fn cache_stats(&self) -> CacheStats {
+        let cache = self.cache.read().await;
+        CacheStats {
+            chunks_cached: cache.chunks.len(),
+            total_size: cache.total_size,
+            hit_rate: cache.hit_rate(),
+            hits: cache.hit_count.load(Ordering::Relaxed),
+            misses: cache.miss_count.load(Ordering::Relaxed),
+            evictions: cache.eviction_count.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Start background integrity scanner (if enabled)
+    pub fn start_background_scanner(self: Arc<Self>) {
+        if !self.config.enable_background_scan {
+            return;
+        }
+
+        let scanner = Arc::clone(&self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(
+                tokio::time::Duration::from_secs(scanner.config.scan_interval_secs)
+            );
+            
+            loop {
+                interval.tick().await;
+                
+                debug!("Starting background integrity scan");
+                match scanner.verify_integrity().await {
+                    Ok(report) => {
+                        if !report.is_healthy() {
+                            warn!(
+                                "Background scan found issues: {} corrupted, {} errors",
+                                report.corruption_count, report.error_count
+                            );
+                        } else {
+                            debug!(
+                                "Background scan completed: {} objects verified healthy",
+                                report.verified_count
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Background integrity scan failed: {}", e);
+                    }
+                }
+            }
+        });
     }
 
     /// Perform garbage collection and repacking
@@ -1066,6 +1662,80 @@ pub struct PackingStats {
     pub bytes_saved: u64,
 }
 
+/// Runtime statistics for the content store
+#[derive(Debug, Clone)]
+pub struct ContentStoreStats {
+    /// Total write operations
+    pub total_writes: u64,
+    /// Total read operations
+    pub total_reads: u64,
+    /// Total bytes written
+    pub bytes_written: u64,
+    /// Total bytes read
+    pub bytes_read: u64,
+    /// Objects stored in packfiles
+    pub objects_packed: u64,
+    /// Verification operations performed
+    pub verifications_performed: u64,
+    /// Corruptions found during verification
+    pub corruptions_found: u64,
+    /// Cache hits
+    pub cache_hits: u64,
+    /// Cache misses
+    pub cache_misses: u64,
+    /// Cache hit rate
+    pub cache_hit_rate: f64,
+    /// Batch flushes
+    pub batch_flushes: u64,
+    /// Deduplication hits
+    pub dedup_hits: u64,
+}
+
+/// Cache statistics
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    /// Number of chunks in cache
+    pub chunks_cached: usize,
+    /// Total size of cached data
+    pub total_size: u64,
+    /// Cache hit rate
+    pub hit_rate: f64,
+    /// Total hits
+    pub hits: u64,
+    /// Total misses
+    pub misses: u64,
+    /// Total evictions
+    pub evictions: u64,
+}
+
+/// Helper function to verify an object at a specific path
+async fn verify_object_with_path(path: &Path, expected_hash: &ContentHash) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    // Check file metadata for basic integrity
+    let metadata = fs::metadata(path).await?;
+    if metadata.len() == 0 {
+        return Ok(false);
+    }
+
+    // Read and verify hash
+    let data = fs::read(path).await?;
+    
+    // Verify that the read size matches the metadata
+    if data.len() as u64 != metadata.len() {
+        return Ok(false);
+    }
+
+    // Verify hash integrity
+    let mut hasher = Hasher::new();
+    hasher.update(&data);
+    let actual_hash = ContentHash::from_blake3(hasher.finalize());
+
+    Ok(actual_hash == *expected_hash)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1188,6 +1858,11 @@ mod tests {
             compression: CompressionType::None,
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
+            cache_config: CacheConfig::default(),
+            enable_batch_ops: true,
+            max_concurrent_ops: 32,
+            enable_background_scan: false,
+            scan_interval_secs: 3600,
         };
         let store = ContentStore::new_with_config(dir.path(), config)
             .await
@@ -1210,6 +1885,11 @@ mod tests {
             compression: CompressionType::None,
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
+            cache_config: CacheConfig::default(),
+            enable_batch_ops: true,
+            max_concurrent_ops: 32,
+            enable_background_scan: false,
+            scan_interval_secs: 3600,
         };
         let store = ContentStore::new_with_config(dir.path(), config)
             .await
@@ -1232,6 +1912,11 @@ mod tests {
             compression: CompressionType::None,
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
+            cache_config: CacheConfig::default(),
+            enable_batch_ops: true,
+            max_concurrent_ops: 32,
+            enable_background_scan: false,
+            scan_interval_secs: 3600,
         };
         let store = ContentStore::new_with_config(dir.path(), config)
             .await
@@ -1297,6 +1982,11 @@ mod tests {
             compression: CompressionType::None,
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
+            cache_config: CacheConfig::default(),
+            enable_batch_ops: true,
+            max_concurrent_ops: 32,
+            enable_background_scan: false,
+            scan_interval_secs: 3600,
         };
 
         // Create store without recovery
@@ -1515,6 +2205,11 @@ mod tests {
             compression: CompressionType::None,
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
+            cache_config: CacheConfig::default(),
+            enable_batch_ops: true,
+            max_concurrent_ops: 32,
+            enable_background_scan: false,
+            scan_interval_secs: 3600,
         };
 
         let store = ContentStore::new_with_config(dir.path(), config)
@@ -1550,6 +2245,11 @@ mod tests {
             compression: CompressionType::None,
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
+            cache_config: CacheConfig::default(),
+            enable_batch_ops: true,
+            max_concurrent_ops: 32,
+            enable_background_scan: false,
+            scan_interval_secs: 3600,
         };
         let store = ContentStore::new_with_config(dir.path(), config)
             .await
@@ -1578,6 +2278,11 @@ mod tests {
                 compression: CompressionType::None,
             },
             enable_packfiles: true, // Enable for this test
+            cache_config: CacheConfig::default(),
+            enable_batch_ops: true,
+            max_concurrent_ops: 32,
+            enable_background_scan: false,
+            scan_interval_secs: 3600,
         };
 
         let mut store = ContentStore::new_with_config(dir.path(), config)
@@ -1622,7 +2327,7 @@ mod tests {
         assert_eq!(stats.object_count, 4);
 
         // Get packfile-specific stats
-        let packfile_stats = store.packfile_stats();
+        let packfile_stats = store.packfile_stats().await;
         assert!(packfile_stats.is_some());
         let pack_stats = packfile_stats.unwrap();
 

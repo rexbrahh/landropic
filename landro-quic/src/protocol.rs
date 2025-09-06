@@ -26,6 +26,8 @@ pub enum MessageType {
     ChunkData = 4,
     Ack = 5,
     Error = 6,
+    DiffRequest = 7,
+    DiffResponse = 8,
 }
 
 impl MessageType {
@@ -38,6 +40,8 @@ impl MessageType {
             4 => Some(MessageType::ChunkData),
             5 => Some(MessageType::Ack),
             6 => Some(MessageType::Error),
+            7 => Some(MessageType::DiffRequest),
+            8 => Some(MessageType::DiffResponse),
             _ => None,
         }
     }
@@ -302,6 +306,14 @@ impl StreamProtocol {
                     .receive_typed_message::<ProtoError>(&mut stream)
                     .await?;
                 ProtocolMessage::Error(error)
+            }
+            MessageType::DiffRequest => {
+                // TODO: Implement DiffRequest deserialization when available
+                return Err(QuicError::Protocol("DiffRequest not yet implemented".to_string()));
+            }
+            MessageType::DiffResponse => {
+                // TODO: Implement DiffResponse deserialization when available
+                return Err(QuicError::Protocol("DiffResponse not yet implemented".to_string()));
             }
         };
 

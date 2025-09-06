@@ -41,6 +41,9 @@ pub enum CasError {
 
     #[error("Invalid operation: {0}")]
     InvalidOperation(String),
+
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 pub type Result<T> = std::result::Result<T, CasError>;

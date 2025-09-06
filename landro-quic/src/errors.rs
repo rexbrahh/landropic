@@ -40,6 +40,9 @@ pub enum QuicError {
 
     #[error("Crypto error: {0}")]
     Crypto(#[from] landro_crypto::CryptoError),
+
+    #[error("Pairing error: {0}")]
+    PairingError(String),
 }
 
 impl QuicError {
@@ -62,6 +65,11 @@ impl QuicError {
         Self::AuthenticationFailed {
             reason: reason.into(),
         }
+    }
+
+    /// Create a pairing failure error
+    pub fn pairing_failed(reason: impl Into<String>) -> Self {
+        Self::PairingError(format!("Pairing failed: {}", reason.into()))
     }
 
     /// Check if this error is recoverable (could retry)
@@ -106,6 +114,7 @@ impl Clone for QuicError {
             },
             Self::ServerAlreadyRunning => Self::ServerAlreadyRunning,
             Self::Crypto(e) => Self::Protocol(format!("Crypto error: {}", e)),
+            Self::PairingError(s) => Self::PairingError(s.clone()),
         }
     }
 }

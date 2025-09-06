@@ -69,6 +69,10 @@ enum Commands {
     /// Manage background daemon
     #[command(subcommand)]
     Daemon(DaemonCommands),
+
+    /// Manage configuration
+    #[command(subcommand)]
+    Config(ConfigCommands),
 }
 
 #[derive(Subcommand)]
@@ -77,6 +81,35 @@ enum DaemonCommands {
     Stop,
     Restart,
     Status,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Show current configuration
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+    
+    /// Set a configuration value
+    Set {
+        /// Configuration key (device_name, daemon_port, storage_path)
+        key: String,
+        /// Value to set
+        value: String,
+    },
+    
+    /// Get a specific configuration value
+    Get {
+        /// Configuration key to retrieve
+        key: String,
+    },
+    
+    /// Reset configuration to defaults
+    Reset {
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -98,6 +131,7 @@ async fn main() -> Result<()> {
         Commands::Unsync { folder } => handle_unsync(folder).await,
         Commands::Peers { json } => handle_peers(json).await,
         Commands::Daemon(cmd) => handle_daemon(cmd).await,
+        Commands::Config(cmd) => handle_config(cmd).await,
     };
 
     // Handle errors with colored output
@@ -510,6 +544,103 @@ async fn handle_daemon(cmd: DaemonCommands) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+async fn handle_config(cmd: ConfigCommands) -> Result<()> {
+    use colored::Colorize;
+
+    match cmd {
+        ConfigCommands::Show { json } => {
+            let config = config::Config::load()?;
+            
+            if json {
+                println!("{}", serde_json::to_string_pretty(&config)?);
+            } else {
+                println!("{}", "Landropic Configuration".bold().blue());
+                println!("{}", "======================".blue());
+                println!("Device Name: {}", config.device_name.bold());
+                println!("Device ID: {}", config.device_id.dimmed());
+                println!("Daemon Port: {}", config.daemon_port.to_string().cyan());
+                println!("Storage Path: {}", config.storage_path.display().to_string().green());
+            }
+        }
+        ConfigCommands::Get { key } => {
+            let config = config::Config::load()?;
+            
+            match key.to_lowercase().as_str() {
+                "device_name" | "device-name" => println!("{}", config.device_name),
+                "device_id" | "device-id" => println!("{}", config.device_id),
+                "daemon_port" | "daemon-port" => println!("{}", config.daemon_port),
+                "storage_path" | "storage-path" => println!("{}", config.storage_path.display()),
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown configuration key: {}. Valid keys: device_name, device_id, daemon_port, storage_path",
+                        key
+                    ));
+                }
+            }
+        }
+        ConfigCommands::Set { key, value } => {
+            let mut config = config::Config::load()?;
+            
+            match key.to_lowercase().as_str() {
+                "device_name" | "device-name" => {
+                    config.device_name = value.clone();
+                    println!("{} Set device_name to: {}", "✓".green(), value.bold());
+                }
+                "daemon_port" | "daemon-port" => {
+                    let port: u16 = value.parse()
+                        .context("Invalid port number. Must be between 1 and 65535")?;
+                    config.daemon_port = port;
+                    println!("{} Set daemon_port to: {}", "✓".green(), port.to_string().cyan());
+                }
+                "storage_path" | "storage-path" => {
+                    let path = PathBuf::from(&value);
+                    // Verify the path is valid
+                    if !path.parent().map(|p| p.exists()).unwrap_or(false) {
+                        return Err(anyhow::anyhow!("Parent directory does not exist: {}", value));
+                    }
+                    config.storage_path = path;
+                    println!("{} Set storage_path to: {}", "✓".green(), value.green());
+                }
+                "device_id" | "device-id" => {
+                    return Err(anyhow::anyhow!(
+                        "Cannot modify device_id. This is generated during initialization"
+                    ));
+                }
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown configuration key: {}. Valid keys: device_name, daemon_port, storage_path",
+                        key
+                    ));
+                }
+            }
+            
+            config.save()?;
+            println!("\n{} Restart the daemon for changes to take effect", "💡".blue());
+        }
+        ConfigCommands::Reset { force } => {
+            if !force {
+                println!("{}", "This will reset all configuration to default values.".yellow());
+                println!("Use --force to confirm");
+                return Ok(());
+            }
+            
+            let device_name = whoami::devicename();
+            let config = config::Config {
+                device_name: device_name.clone(),
+                device_id: String::new(), // Will need to regenerate identity
+                daemon_port: 7703,
+                storage_path: config::default_storage_path()?,
+            };
+            
+            config.save()?;
+            println!("{} Configuration reset to defaults", "✓".green());
+            println!("{} You will need to re-initialize with 'landropic init'", "⚠".yellow());
+        }
+    }
+    
     Ok(())
 }
 

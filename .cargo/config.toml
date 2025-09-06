@@ -1,0 +1,10 @@
+# Build configuration without sccache
+[build]
+# Remove sccache wrapper completely
+
+# Keep other optimizations
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-ld_classic"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-ld_classic"]

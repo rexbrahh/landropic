@@ -352,7 +352,7 @@ mod macos {
     use std::os::unix::io::RawFd;
 
     /// Use sendfile system call for zero-copy file transfer (macOS)
-    pub fn sendfile(fd: RawFd, s: RawFd, offset: i64, len: Option<i64>) -> std::io::Result<usize> {
+    pub fn sendfile(_fd: RawFd, _s: RawFd, _offset: i64, _len: Option<i64>) -> std::io::Result<usize> {
         // This would use the actual sendfile syscall on macOS
         // For now, this is a placeholder
         unimplemented!("sendfile not yet implemented for macOS")
@@ -362,6 +362,7 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::NamedTempFile;
     use tokio::io::AsyncWriteExt;
 

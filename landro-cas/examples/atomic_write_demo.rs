@@ -1,4 +1,4 @@
-use landro_cas::{CompressionType, ContentStore, ContentStoreConfig, FsyncPolicy};
+use landro_cas::{CompressionType, ContentStore, ContentStoreConfig, FsyncPolicy, CacheConfig};
 use tokio;
 
 /// Demonstrates atomic write capabilities and recovery features
@@ -14,6 +14,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 compression: CompressionType::None,
                 packfile_config: Default::default(),
                 enable_packfiles: false, // Disabled for v1.0
+                cache_config: CacheConfig::default(),
+                enable_batch_ops: true,
+                max_concurrent_ops: 32,
+                enable_background_scan: false,
+                scan_interval_secs: 3600,
             },
         ),
         (
@@ -24,6 +29,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 compression: CompressionType::None,
                 packfile_config: Default::default(),
                 enable_packfiles: false, // Disabled for v1.0
+                cache_config: CacheConfig::default(),
+                enable_batch_ops: true,
+                max_concurrent_ops: 32,
+                enable_background_scan: false,
+                scan_interval_secs: 3600,
             },
         ),
         (
@@ -34,6 +44,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 compression: CompressionType::None,
                 packfile_config: Default::default(),
                 enable_packfiles: false, // Disabled for v1.0
+                cache_config: CacheConfig::default(),
+                enable_batch_ops: true,
+                max_concurrent_ops: 32,
+                enable_background_scan: false,
+                scan_interval_secs: 3600,
             },
         ),
     ];

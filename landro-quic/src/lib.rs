@@ -142,12 +142,14 @@ pub mod client;
 pub mod config;
 pub mod connection;
 pub mod errors;
+pub mod pairing;
 pub mod parallel_transfer;
 pub mod pool;
 pub mod protocol;
 pub mod recovery;
 pub mod resumable;
 pub mod server;
+pub mod stream_transfer;
 pub mod transfer;
 pub mod zero_copy;
 
@@ -155,8 +157,12 @@ pub use client::QuicClient;
 pub use config::QuicConfig;
 pub use connection::{Connection, StreamType};
 pub use errors::{QuicError, Result};
+pub use pairing::{PairingContext, PairingManager, PairingState};
 pub use parallel_transfer::{
-    ChunkProvider, ParallelTransferConfig, ParallelTransferManager, ZeroCopyChunkSender,
+    ChunkProvider, TransferConfig, TransferManager, MemoryChunkProvider,
+};
+pub use stream_transfer::{
+    MultiplexedStream, StreamTransferConfig, StreamTransferManager, TransferResult,
 };
 pub use pool::{ConnectionPool, PoolConfig, PooledConnection};
 pub use protocol::{BatchTransferManager, MessageType, ProtocolMessage, StreamProtocol};
