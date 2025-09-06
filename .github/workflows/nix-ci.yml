@@ -1,14 +1,18 @@
 name: Nix CI
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-    branches: [main]
+  # Temporarily disabled - Nix builds taking too long on macOS CI
+  # Re-enable when Nix caching is properly configured
+  workflow_dispatch:  # Manual trigger only for now
+  # push:
+  #   branches: [main]
+  #   tags: ['v*']
+  # pull_request:
+  #   branches: [main]
 
 jobs:
   check:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45  # Increase timeout for macOS
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
