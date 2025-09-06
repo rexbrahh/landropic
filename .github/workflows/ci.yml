@@ -37,6 +37,7 @@ jobs:
       
       # Code Quality checks (Agent 5 automation)
       - name: Format check with detailed diff
+        shell: bash
         run: |
           echo "🔍 Checking code formatting..."
           if ! cargo fmt --all -- --check; then
@@ -51,16 +52,19 @@ jobs:
           echo "✅ Code formatting is correct"
           
       - name: Clippy analysis with detailed output
+        shell: bash
         run: |
           echo "🔍 Running Clippy analysis..."
           cargo clippy --workspace --all-targets -- -D warnings -W clippy::cargo -W clippy::nursery -W clippy::pedantic -A clippy::module_name_repetitions -A clippy::missing_errors_doc
       
       # Fast development profile tests
       - name: Fast tests (dev profile)
+        shell: bash
         run: cargo test --workspace --profile test-fast
       
       # Full test suite
       - name: Release tests
+        shell: bash
         run: cargo test --workspace --release --verbose
 
   # Agent 4 (QA) Specialized Testing
@@ -81,11 +85,13 @@ jobs:
       
       # Install QA tools
       - name: Install testing tools
+        shell: bash
         run: |
           cargo install cargo-audit cargo-deny cargo-tarpaulin || true
           
       # Integration testing across all crates
       - name: Cross-crate integration testing
+        shell: bash
         run: |
           echo "🔗 Running integration test matrix..."
           cargo test -p landro-proto --profile test-fast --tests --lib
@@ -100,16 +106,19 @@ jobs:
       
       # Security audit (Agent 4 responsibility)
       - name: Security audit
+        shell: bash
         run: |
           cargo audit || echo "⚠️ Security audit failed - needs attention"
       
       # Coverage analysis
       - name: Code coverage
+        shell: bash
         run: |
           cargo tarpaulin --workspace --out xml --timeout 300 || echo "Coverage analysis completed with warnings"
       
       # Performance regression check
       - name: Performance benchmarks
+        shell: bash
         run: |
           cargo bench --workspace || echo "Benchmarks completed"
 
@@ -134,6 +143,7 @@ jobs:
       
       # Automated quality improvements
       - name: Auto-fix formatting and validate
+        shell: bash
         run: |
           echo "🔧 Auto-fixing formatting..."
           cargo fmt --all
@@ -147,18 +157,21 @@ jobs:
           fi
           
       - name: Auto-fix clippy warnings
+        shell: bash
         run: |
           echo "🔧 Auto-fixing clippy warnings..."
           cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged || true
           echo "✅ Clippy auto-fix completed"
           
       - name: Dependency analysis
+        shell: bash
         run: |
           echo "📦 Dependency tree analysis:"
           cargo tree --duplicates
           
       # Commit fixes back to PR (if any)
       - name: Commit quality improvements
+        shell: bash
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "Quality Agent"
@@ -188,17 +201,21 @@ jobs:
       
       # Production build validation
       - name: Production build
+        shell: bash
         run: cargo build --release --workspace
       
       # Documentation generation
       - name: Generate documentation
+        shell: bash
         run: cargo doc --workspace --no-deps
       
       # Final smoke test
       - name: Smoke test
+        shell: bash
         run: cargo test --workspace --lib --bins --profile test-fast
         
       - name: Deployment ready
+        shell: bash
         run: |
           echo "🚀 Landropic is ready for deployment!"
           echo "✅ Multi-platform builds passing"
