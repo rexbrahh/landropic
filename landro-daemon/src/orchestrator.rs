@@ -21,7 +21,7 @@ use landro_quic::{QuicServer, QuicConfig, Connection};
 use landro_crypto::{DeviceIdentity, CertificateVerifier};
 
 /// Messages that can be sent to the orchestrator
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum OrchestratorMessage {
     /// File system change detected
     FileChanged(FileEvent),
@@ -487,7 +487,7 @@ impl SyncOrchestrator {
             Ok(Ok(_)) => {
                 // Send our hello
                 if let Err(e) = connection.send_hello(
-                    identity.device_id_bytes(),
+                    identity.device_id().as_bytes(),
                     &identity.device_name(),
                 ).await {
                     error!("Failed to send hello: {}", e);
@@ -773,7 +773,7 @@ impl SyncOrchestrator {
         info!("Peer lost: {} - cleaning up state", peer_id);
 
         // Clean up any pending operations for this peer
-        self.pending_operations.retain(|op| {
+        self.pending_operations.retain(|_op| {
             // Keep operations not related to this peer
             // In a real implementation, we'd track peer associations
             true
@@ -824,7 +824,7 @@ impl SyncOrchestrator {
         // Send sync request for each folder
         for folder in &self.synced_folders {
             // Build manifest for this folder
-            let manifest = self.indexer.build_manifest(folder).await?;
+            let manifest = self.indexer.index_folder(folder).await?;
             
             // Serialize manifest (using a simple format for now)
             let manifest_data = serde_json::to_vec(&manifest)?;
@@ -1036,7 +1036,7 @@ impl SyncOrchestrator {
         let read_size = 1024 * 1024; // 1MB read buffer
         let mut buffer = Vec::with_capacity(read_size * 2);
         let mut total_chunks = 0;
-        let mut file_offset = 0u64;
+        let mut _file_offset = 0u64;
 
         loop {
             // Read next chunk from file
