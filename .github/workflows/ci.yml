@@ -32,6 +32,17 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
+      - name: Install protoc
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            brew install protobuf
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            choco install protoc
+          fi
+          protoc --version
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       
@@ -80,6 +91,11 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - name: Install protoc
+        shell: bash
+        run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          protoc --version
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       
@@ -138,6 +154,11 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      - name: Install protoc
+        shell: bash
+        run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          protoc --version
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       
@@ -196,6 +217,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Install protoc
+        shell: bash
+        run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          protoc --version
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       
