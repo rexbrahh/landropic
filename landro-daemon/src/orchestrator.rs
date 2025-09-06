@@ -683,14 +683,10 @@ impl SyncOrchestrator {
             info!("Peer sync requested - simplified handling for v1.0");
             if false { // Placeholder condition
                 info!("Established connection to peer {}", peer.device_name);
-                    Err(e) => {
-                        warn!("Failed to connect to peer {}: {}", peer.device_name, e);
-                    }
-                }
-            } else if let Some(ref callback) = self.on_peer_sync_needed {
-                // Fallback to callback if QUIC not initialized
-                callback(peer.device_id.clone(), self.synced_folders.clone());
             }
+        } else if let Some(ref callback) = self.on_peer_sync_needed {
+            // Fallback to callback if QUIC not initialized
+            callback(peer.device_id.clone(), self.synced_folders.clone());
         }
 
         Ok(())
@@ -775,10 +771,6 @@ impl SyncOrchestrator {
         if false { // Placeholder condition
             for (peer_id, _peer_info) in &self.active_peers {
                 info!("Would sync with peer: {}", peer_id);
-                    Err(e) => {
-                        warn!("Failed to get connection to {}: {}", peer_id, e);
-                    }
-                }
             }
         } else if let Some(ref callback) = self.on_peer_sync_needed {
             // Fallback to callback
