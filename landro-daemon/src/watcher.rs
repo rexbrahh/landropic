@@ -31,7 +31,7 @@ pub struct FileWatcher {
 
 impl FileWatcher {
     /// Create new file watcher for a directory
-    pub fn new(path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(path: PathBuf) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Self {
             path,
             _watcher: None,
@@ -45,7 +45,7 @@ impl FileWatcher {
     }
 
     /// Start watching with a callback
-    pub fn start<F>(&self, callback: F) -> Result<(), Box<dyn std::error::Error>>
+    pub fn start<F>(&self, callback: F) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     where
         F: Fn(Vec<FileEvent>) + Send + 'static,
     {
@@ -124,7 +124,7 @@ impl FileWatcher {
     }
 
     /// Stop watching
-    pub fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn stop(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tokio::spawn({
             let running = self.running.clone();
             async move {

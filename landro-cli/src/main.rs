@@ -168,7 +168,7 @@ async fn handle_init(name: Option<String>) -> Result<()> {
     println!(
         "{} Device ID: {}",
         "✓".green(),
-        identity.device_id().dimmed()
+        format!("{}", identity.device_id()).dimmed()
     );
     println!("{} Background sync daemon started", "✓".green());
     println!(
@@ -364,7 +364,9 @@ async fn handle_status(json: bool, folder: Option<PathBuf>) -> Result<()> {
                 if folder.files_synced > 0 || folder.files_pending > 0 {
                     let synced_text = format!("{} synced", folder.files_synced).green();
                     let pending_text = if folder.files_pending > 0 {
-                        format!(", {} pending", folder.files_pending).yellow()
+                        format!(", {} pending", folder.files_pending)
+                            .yellow()
+                            .to_string()
                     } else {
                         "".to_string()
                     };

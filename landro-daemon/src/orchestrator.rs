@@ -149,7 +149,7 @@ impl SyncOrchestrator {
         store: Arc<ContentStore>,
         chunker: Arc<Chunker>,
         indexer: Arc<AsyncIndexer>,
-        storage_path: &PathBuf,
+        _storage_path: &PathBuf,
     ) -> Result<(Self, mpsc::Sender<OrchestratorMessage>), Box<dyn std::error::Error + Send + Sync>>
     {
         let (sender, receiver) = mpsc::channel(1000);
@@ -222,7 +222,7 @@ impl SyncOrchestrator {
     async fn handle_message(
         &mut self,
         message: OrchestratorMessage,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         match message {
             OrchestratorMessage::FileChanged(event) => {
                 debug!("File changed: {:?}", event);
@@ -788,7 +788,10 @@ async fn process_single_file(
                 // Store chunks in CAS
                 for chunk in &chunks {
                     let obj_ref = store.write(&chunk.data).await?;
-                    debug!("Stored chunk with hash: {}", hex::encode(&obj_ref.hash.0));
+                    debug!(
+                        "Stored chunk with hash: {}",
+                        hex::encode(obj_ref.hash.as_bytes())
+                    );
                 }
 
                 // Update index - index parent folder to include this file

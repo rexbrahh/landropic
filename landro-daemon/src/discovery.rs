@@ -195,6 +195,9 @@ impl DiscoveryService {
                     ServiceEvent::SearchStopped(_) => {
                         debug!("mDNS search stopped");
                     }
+                    ServiceEvent::ServiceFound(_, _) => {
+                        debug!("Service found, waiting for resolution");
+                    }
                 }
             }
         });
@@ -247,7 +250,7 @@ impl DiscoveryService {
     }
 
     /// Stop the discovery service
-    pub async fn stop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn stop(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if !*self.running.read().await {
             return Ok(());
         }
@@ -307,7 +310,7 @@ fn parse_service_info(info: &ServiceInfo) -> Option<PeerInfo> {
         .to_string();
 
     let capabilities = properties
-        .get_property_str("capabilities")
+        .get_property_val_str("capabilities")
         .map(|c| c.split(',').map(|s| s.to_string()).collect())
         .unwrap_or_default();
 
