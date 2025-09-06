@@ -1,6 +1,14 @@
+use std::fs;
 use std::io::Result;
+use std::path::Path;
 
 fn main() -> Result<()> {
+    // Ensure the generated directory exists
+    let generated_dir = Path::new("src/generated");
+    if !generated_dir.exists() {
+        fs::create_dir_all(generated_dir)?;
+    }
+
     let mut config = prost_build::Config::new();
 
     // Add Eq derive only to message types, not enums (they already have it)
