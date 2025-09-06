@@ -1,5 +1,6 @@
 use blake3::Hasher;
 use bytes::Bytes;
+use chrono;
 use memmap2::MmapOptions;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,7 +10,6 @@ use std::sync::Arc;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tracing::{debug, trace, warn};
-use chrono;
 
 use crate::errors::{CasError, Result};
 use crate::storage::CompressionType;
@@ -45,7 +45,7 @@ impl Default for PackfileConfig {
     fn default() -> Self {
         Self {
             max_packfile_size: 256 * 1024 * 1024, // 256MB
-            pack_threshold: 64 * 1024, // 64KB
+            pack_threshold: 64 * 1024,            // 64KB
             min_chunks_per_pack: 100,
             compression: CompressionType::None,
         }
@@ -75,7 +75,7 @@ impl PackfileEntry {
             data: None,
         }
     }
-    
+
     pub fn with_data(hash: ContentHash, offset: u64, size: u32, data: Vec<u8>) -> Self {
         Self {
             hash,
@@ -137,14 +137,15 @@ impl PackfileIndex {
 
     /// Save the index to disk
     pub async fn save_to_disk(&self, index_path: &Path) -> Result<()> {
-        let serialized = bincode::serialize(self)
-            .map_err(|e| CasError::InconsistentState(format!("Failed to serialize index: {}", e)))?;
-        
+        let serialized = bincode::serialize(self).map_err(|e| {
+            CasError::InconsistentState(format!("Failed to serialize index: {}", e))
+        })?;
+
         // Write atomically using temporary file
         let temp_path = index_path.with_extension("tmp");
         fs::write(&temp_path, &serialized).await?;
         fs::rename(&temp_path, index_path).await?;
-        
+
         debug!("Saved packfile index to {:?}", index_path);
         Ok(())
     }
@@ -152,13 +153,18 @@ impl PackfileIndex {
     /// Load index from disk
     pub async fn load_from_disk(index_path: &Path, packfile_path: PathBuf) -> Result<Self> {
         let data = fs::read(index_path).await?;
-        
-        let mut index: PackfileIndex = bincode::deserialize(&data)
-            .map_err(|e| CasError::InconsistentState(format!("Failed to deserialize index: {}", e)))?;
-        
+
+        let mut index: PackfileIndex = bincode::deserialize(&data).map_err(|e| {
+            CasError::InconsistentState(format!("Failed to deserialize index: {}", e))
+        })?;
+
         index.packfile_path = packfile_path;
-        
-        debug!("Loaded packfile index from {:?} with {} entries", index_path, index.entries.len());
+
+        debug!(
+            "Loaded packfile index from {:?} with {} entries",
+            index_path,
+            index.entries.len()
+        );
         Ok(index)
     }
 }
@@ -178,15 +184,15 @@ impl PackfileWriter {
     /// Create a new packfile writer
     pub async fn new(path: &Path, config: PackfileConfig) -> Result<Self> {
         let mut file = File::create(path).await?;
-        
+
         // Write header: magic + version + placeholder entry count
         file.write_all(PACKFILE_MAGIC).await?;
         file.write_u32_le(PACKFILE_VERSION).await?;
         file.write_u64_le(0).await?; // Placeholder for entry count
         file.sync_all().await?;
-        
+
         let data_offset = PACKFILE_HEADER_SIZE;
-        
+
         Ok(Self {
             file,
             entries: Vec::new(),
@@ -195,7 +201,7 @@ impl PackfileWriter {
             packfile_path: path.to_path_buf(),
         })
     }
-    
+
     /// Add a chunk to the packfile
     pub async fn add_chunk(&mut self, hash: &ContentHash, data: &[u8]) -> Result<()> {
         if data.len() > u32::MAX as usize {
@@ -204,26 +210,26 @@ impl PackfileWriter {
                 actual: data.len() as u64,
             });
         }
-        
+
         // Write data immediately to the file
         self.file.write_all(data).await?;
-        
+
         // Create entry record
         let entry = PackfileEntry::new(*hash, self.data_offset, data.len() as u32);
         self.entries.push(entry);
-        
+
         // Update offset for next chunk
         self.data_offset += data.len() as u64;
-        
+
         trace!("Added chunk {} ({} bytes) to packfile", hash, data.len());
         Ok(())
     }
-    
+
     /// Finalize the packfile and return a reader
     pub async fn finalize(mut self) -> Result<PackfileReader> {
         // Write entry table at current position
         let _entry_table_offset = self.data_offset;
-        
+
         for entry in &self.entries {
             // Write hash (32 bytes)
             self.file.write_all(entry.hash.as_bytes()).await?;
@@ -232,40 +238,48 @@ impl PackfileWriter {
             // Write size (4 bytes)
             self.file.write_u32_le(entry.size).await?;
         }
-        
+
         // Calculate and write packfile hash as footer
         let mut packfile_hasher = Hasher::new();
-        
+
         // Seek back to beginning and hash the entire file content
         self.file.seek(SeekFrom::Start(0)).await?;
         let mut buffer = vec![0u8; 8192];
         loop {
             let n = self.file.read(&mut buffer).await?;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             packfile_hasher.update(&buffer[..n]);
         }
-        
+
         let packfile_hash = packfile_hasher.finalize();
         self.file.write_all(packfile_hash.as_bytes()).await?;
-        
+
         // Update header with actual entry count
-        self.file.seek(SeekFrom::Start(PACKFILE_MAGIC.len() as u64 + 4)).await?;
+        self.file
+            .seek(SeekFrom::Start(PACKFILE_MAGIC.len() as u64 + 4))
+            .await?;
         self.file.write_u64_le(self.entries.len() as u64).await?;
-        
+
         // Sync to disk
         self.file.sync_all().await?;
-        
-        debug!("Finalized packfile with {} entries at {:?}", self.entries.len(), self.packfile_path);
-        
+
+        debug!(
+            "Finalized packfile with {} entries at {:?}",
+            self.entries.len(),
+            self.packfile_path
+        );
+
         // Create and return reader
         PackfileReader::open(&self.packfile_path).await
     }
-    
+
     /// Get the current number of chunks in the packfile
     pub fn chunk_count(&self) -> usize {
         self.entries.len()
     }
-    
+
     /// Get the current data size
     pub fn data_size(&self) -> u64 {
         self.data_offset - PACKFILE_HEADER_SIZE
@@ -292,111 +306,119 @@ impl PackfileReader {
     /// Open an existing packfile for reading
     pub async fn open(path: &Path) -> Result<Self> {
         let mut file = File::open(path).await?;
-        
+
         // Read and verify header
         let mut magic = vec![0u8; PACKFILE_MAGIC.len()];
         file.read_exact(&mut magic).await?;
         if magic != PACKFILE_MAGIC {
-            return Err(CasError::InconsistentState("Invalid packfile magic".to_string()));
+            return Err(CasError::InconsistentState(
+                "Invalid packfile magic".to_string(),
+            ));
         }
-        
+
         let version = file.read_u32_le().await?;
         if version != PACKFILE_VERSION {
-            return Err(CasError::InconsistentState(format!("Unsupported packfile version: {}", version)));
+            return Err(CasError::InconsistentState(format!(
+                "Unsupported packfile version: {}",
+                version
+            )));
         }
-        
+
         let entry_count = file.read_u64_le().await?;
-        
+
         // Get file size to calculate entry table offset
         let file_size = file.metadata().await?.len();
-        let entry_table_offset = file_size - PACKFILE_FOOTER_SIZE - (entry_count * PACKFILE_ENTRY_SIZE);
-        
+        let entry_table_offset =
+            file_size - PACKFILE_FOOTER_SIZE - (entry_count * PACKFILE_ENTRY_SIZE);
+
         // Seek to entry table and read entries
         file.seek(SeekFrom::Start(entry_table_offset)).await?;
-        
+
         let mut entries = HashMap::new();
         let mut total_size = 0u64;
-        
+
         for _ in 0..entry_count {
             // Read hash (32 bytes)
             let mut hash_bytes = [0u8; 32];
             file.read_exact(&mut hash_bytes).await?;
             let hash = ContentHash::from_bytes(hash_bytes);
-            
+
             // Read offset (8 bytes)
             let offset = file.read_u64_le().await?;
-            
+
             // Read size (4 bytes)
             let size = file.read_u32_le().await?;
-            
+
             let entry = PackfileEntry::new(hash, offset, size);
             total_size += size as u64;
             entries.insert(hash, entry);
         }
-        
+
         // Verify packfile hash (optional but recommended)
         let mut stored_hash = [0u8; 32];
         file.read_exact(&mut stored_hash).await?;
-        
+
         let stats = PackfileStats {
             total_packs: 1,
             total_objects: entries.len(),
             total_packed_size: total_size,
         };
-        
+
         debug!("Opened packfile {:?} with {} chunks", path, entries.len());
-        
+
         Ok(Self {
             file_path: path.to_path_buf(),
             entries,
             stats,
         })
     }
-    
+
     /// Read a chunk from the packfile
     pub async fn read_chunk(&self, hash: &ContentHash) -> Result<Vec<u8>> {
-        let entry = self.entries.get(hash)
+        let entry = self
+            .entries
+            .get(hash)
             .ok_or_else(|| CasError::ObjectNotFound(*hash))?;
-        
+
         let mut file = File::open(&self.file_path).await?;
-        
+
         // Seek to chunk data
         file.seek(SeekFrom::Start(entry.offset)).await?;
-        
+
         // Read chunk data
         let mut buffer = vec![0u8; entry.size as usize];
         file.read_exact(&mut buffer).await?;
-        
+
         // Verify chunk hash
         let mut hasher = Hasher::new();
         hasher.update(&buffer);
         let actual_hash = ContentHash::from_blake3(hasher.finalize());
-        
+
         if actual_hash != *hash {
             return Err(CasError::HashMismatch {
                 expected: *hash,
                 actual: actual_hash,
             });
         }
-        
+
         Ok(buffer)
     }
-    
+
     /// Check if the packfile contains a specific chunk
     pub fn contains_chunk(&self, hash: &ContentHash) -> bool {
         self.entries.contains_key(hash)
     }
-    
+
     /// Get the number of chunks in the packfile
     pub fn chunk_count(&self) -> usize {
         self.entries.len()
     }
-    
+
     /// Get the total size of all chunks
     pub fn total_size(&self) -> u64 {
         self.stats.total_packed_size
     }
-    
+
     /// Get statistics for this packfile
     pub fn stats(&self) -> &PackfileStats {
         &self.stats
@@ -409,96 +431,121 @@ impl MmapPackfileReader {
         // Open file for memory mapping
         let std_file = StdFile::open(path)
             .map_err(|e| CasError::StoragePath(format!("Failed to open packfile: {}", e)))?;
-        
+
         // Create memory map
         let mmap = unsafe {
-            MmapOptions::new()
-                .map(&std_file)
-                .map_err(|e| CasError::StoragePath(format!("Failed to memory map packfile: {}", e)))?
+            MmapOptions::new().map(&std_file).map_err(|e| {
+                CasError::StoragePath(format!("Failed to memory map packfile: {}", e))
+            })?
         };
-        
+
         let mmap = Arc::new(mmap);
-        
+
         // Verify header
         if mmap.len() < PACKFILE_HEADER_SIZE as usize {
-            return Err(CasError::InconsistentState("Packfile too small".to_string()));
+            return Err(CasError::InconsistentState(
+                "Packfile too small".to_string(),
+            ));
         }
-        
+
         // Check magic bytes
         if &mmap[0..PACKFILE_MAGIC.len()] != PACKFILE_MAGIC {
-            return Err(CasError::InconsistentState("Invalid packfile magic".to_string()));
+            return Err(CasError::InconsistentState(
+                "Invalid packfile magic".to_string(),
+            ));
         }
-        
+
         // Read version
         let version_bytes = &mmap[PACKFILE_MAGIC.len()..PACKFILE_MAGIC.len() + 4];
         let version = u32::from_le_bytes([
             version_bytes[0],
-            version_bytes[1], 
+            version_bytes[1],
             version_bytes[2],
             version_bytes[3],
         ]);
-        
+
         if version != PACKFILE_VERSION {
-            return Err(CasError::InconsistentState(format!("Unsupported packfile version: {}", version)));
+            return Err(CasError::InconsistentState(format!(
+                "Unsupported packfile version: {}",
+                version
+            )));
         }
-        
+
         // Read entry count
         let count_offset = PACKFILE_MAGIC.len() + 4;
         let count_bytes = &mmap[count_offset..count_offset + 8];
         let entry_count = u64::from_le_bytes([
-            count_bytes[0], count_bytes[1], count_bytes[2], count_bytes[3],
-            count_bytes[4], count_bytes[5], count_bytes[6], count_bytes[7],
+            count_bytes[0],
+            count_bytes[1],
+            count_bytes[2],
+            count_bytes[3],
+            count_bytes[4],
+            count_bytes[5],
+            count_bytes[6],
+            count_bytes[7],
         ]);
-        
+
         // Calculate entry table offset
         let file_size = mmap.len() as u64;
-        let entry_table_offset = file_size - PACKFILE_FOOTER_SIZE - (entry_count * PACKFILE_ENTRY_SIZE);
-        
+        let entry_table_offset =
+            file_size - PACKFILE_FOOTER_SIZE - (entry_count * PACKFILE_ENTRY_SIZE);
+
         // Parse entries
         let mut entries = HashMap::new();
         let mut total_size = 0u64;
         let mut offset = entry_table_offset as usize;
-        
+
         for _ in 0..entry_count {
             if offset + PACKFILE_ENTRY_SIZE as usize > mmap.len() {
-                return Err(CasError::InconsistentState("Entry table extends beyond file".to_string()));
+                return Err(CasError::InconsistentState(
+                    "Entry table extends beyond file".to_string(),
+                ));
             }
-            
+
             // Read hash
             let hash_bytes: [u8; 32] = mmap[offset..offset + 32]
                 .try_into()
                 .map_err(|_| CasError::InconsistentState("Invalid hash size".to_string()))?;
             let hash = ContentHash::from_bytes(hash_bytes);
             offset += 32;
-            
+
             // Read offset
             let offset_bytes = &mmap[offset..offset + 8];
             let data_offset = u64::from_le_bytes([
-                offset_bytes[0], offset_bytes[1], offset_bytes[2], offset_bytes[3],
-                offset_bytes[4], offset_bytes[5], offset_bytes[6], offset_bytes[7],
+                offset_bytes[0],
+                offset_bytes[1],
+                offset_bytes[2],
+                offset_bytes[3],
+                offset_bytes[4],
+                offset_bytes[5],
+                offset_bytes[6],
+                offset_bytes[7],
             ]);
             offset += 8;
-            
+
             // Read size
             let size_bytes = &mmap[offset..offset + 4];
-            let size = u32::from_le_bytes([
-                size_bytes[0], size_bytes[1], size_bytes[2], size_bytes[3],
-            ]);
+            let size =
+                u32::from_le_bytes([size_bytes[0], size_bytes[1], size_bytes[2], size_bytes[3]]);
             offset += 4;
-            
+
             let entry = PackfileEntry::new(hash, data_offset, size);
             total_size += size as u64;
             entries.insert(hash, entry);
         }
-        
+
         let stats = PackfileStats {
             total_packs: 1,
             total_objects: entries.len(),
             total_packed_size: total_size,
         };
-        
-        debug!("Opened memory-mapped packfile {:?} with {} chunks", path, entries.len());
-        
+
+        debug!(
+            "Opened memory-mapped packfile {:?} with {} chunks",
+            path,
+            entries.len()
+        );
+
         Ok(Self {
             file_path: path.to_path_buf(),
             entries,
@@ -506,62 +553,66 @@ impl MmapPackfileReader {
             mmap,
         })
     }
-    
+
     /// Read a chunk with zero-copy (returns Bytes)
     pub fn read_chunk(&self, hash: &ContentHash) -> Result<Bytes> {
-        let entry = self.entries.get(hash)
+        let entry = self
+            .entries
+            .get(hash)
             .ok_or_else(|| CasError::ObjectNotFound(*hash))?;
-        
+
         let start = entry.offset as usize;
         let end = start + entry.size as usize;
-        
+
         if end > self.mmap.len() {
             return Err(CasError::CorruptObject(
-                "Chunk data extends beyond packfile".to_string()
+                "Chunk data extends beyond packfile".to_string(),
             ));
         }
-        
+
         // Get data slice
         let data = &self.mmap[start..end];
-        
+
         // Verify hash
         let mut hasher = Hasher::new();
         hasher.update(data);
         let actual_hash = ContentHash::from_blake3(hasher.finalize());
-        
+
         if actual_hash != *hash {
             return Err(CasError::HashMismatch {
                 expected: *hash,
                 actual: actual_hash,
             });
         }
-        
+
         // Return as Bytes (copies data but allows for safe lifetime management)
         Ok(Bytes::copy_from_slice(data))
     }
-    
+
     /// Get a direct reference to chunk data (zero-copy, no verification)
     pub fn get_chunk_slice(&self, hash: &ContentHash) -> Result<&[u8]> {
-        let entry = self.entries.get(hash)
+        let entry = self
+            .entries
+            .get(hash)
             .ok_or_else(|| CasError::ObjectNotFound(*hash))?;
-        
+
         let start = entry.offset as usize;
         let end = start + entry.size as usize;
-        
+
         if end > self.mmap.len() {
             return Err(CasError::CorruptObject(
-                "Chunk data extends beyond packfile".to_string()
+                "Chunk data extends beyond packfile".to_string(),
             ));
         }
-        
+
         Ok(&self.mmap[start..end])
     }
-    
+
     /// Check if the packfile contains a chunk
     pub fn contains_chunk(&self, hash: &ContentHash) -> bool {
         self.entries.contains_key(hash)
     }
-    
+
     /// Get packfile statistics
     pub fn stats(&self) -> &PackfileStats {
         &self.stats
@@ -588,11 +639,11 @@ impl PackfileManager {
     pub async fn new(root_path: impl AsRef<Path>) -> Result<Self> {
         Self::new_with_config(root_path, PackfileConfig::default()).await
     }
-    
+
     /// Create a new packfile manager with custom configuration
     pub async fn new_with_config(
-        root_path: impl AsRef<Path>, 
-        config: PackfileConfig
+        root_path: impl AsRef<Path>,
+        config: PackfileConfig,
     ) -> Result<Self> {
         let pack_dir = root_path.as_ref().join("packs");
         fs::create_dir_all(&pack_dir).await?;
@@ -639,7 +690,6 @@ impl PackfileManager {
         Ok(())
     }
 
-
     /// Determine if an object should be stored in a packfile
     pub fn should_pack(&self, size: u64) -> bool {
         size <= self.config.pack_threshold as u64
@@ -647,25 +697,29 @@ impl PackfileManager {
 
     /// Add a chunk to be packed (may not pack immediately)
     pub async fn add_chunk(&mut self, hash: ContentHash, data: &[u8]) -> Result<()> {
-        trace!("Adding {} bytes to pending chunks for hash {}", data.len(), hash);
-        
+        trace!(
+            "Adding {} bytes to pending chunks for hash {}",
+            data.len(),
+            hash
+        );
+
         self.pending_chunks.push((hash, data.to_vec()));
-        
+
         // Check if we should flush packfile
         if self.should_flush_packfile().await {
             self.flush_packfile().await?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Store an object in a packfile immediately
     pub async fn store_packed(&mut self, hash: ContentHash, data: &[u8]) -> Result<()> {
         trace!("Storing {} bytes in packfile for hash {}", data.len(), hash);
 
         // Get or create current packfile writer
         let writer = self.get_or_create_current_writer().await?;
-        
+
         // Add chunk to current packfile
         writer.add_chunk(&hash, data).await?;
 
@@ -686,7 +740,7 @@ impl PackfileManager {
                 return Ok(Some(Bytes::from(chunk_data.clone())));
             }
         }
-        
+
         // Find which packfile contains this object
         for reader in self.pack_readers.values() {
             if reader.contains_chunk(hash) {
@@ -697,7 +751,6 @@ impl PackfileManager {
 
         Ok(None)
     }
-
 
     /// Get or create the current packfile writer
     async fn get_or_create_current_writer(&mut self) -> Result<&mut PackfileWriter> {
@@ -724,45 +777,48 @@ impl PackfileManager {
     /// Check if current packfile should be finalized
     async fn should_finalize_current_pack(&self) -> bool {
         if let Some(writer) = &self.current_writer {
-            writer.data_size() >= self.config.max_packfile_size ||
-            writer.chunk_count() >= self.config.min_chunks_per_pack * 10 // Allow some growth
+            writer.data_size() >= self.config.max_packfile_size
+                || writer.chunk_count() >= self.config.min_chunks_per_pack * 10 // Allow some growth
         } else {
             false
         }
     }
-    
+
     /// Check if pending chunks should be flushed to packfile
     async fn should_flush_packfile(&self) -> bool {
         self.pending_chunks.len() >= self.config.min_chunks_per_pack
     }
-    
+
     /// Flush pending chunks to packfile
     pub async fn flush_packfile(&mut self) -> Result<()> {
         if self.pending_chunks.is_empty() {
             return Ok(());
         }
-        
-        debug!("Flushing {} pending chunks to packfile", self.pending_chunks.len());
-        
+
+        debug!(
+            "Flushing {} pending chunks to packfile",
+            self.pending_chunks.len()
+        );
+
         // Collect chunks first to avoid mutable borrow conflicts
         let chunks_to_flush: Vec<(ContentHash, Vec<u8>)> = self.pending_chunks.drain(..).collect();
-        
+
         // Ensure we have a writer
         let writer = self.get_or_create_current_writer().await?;
-        
+
         // Add all pending chunks
         for (hash, data) in chunks_to_flush {
             writer.add_chunk(&hash, &data).await?;
         }
-        
+
         // Check if we should finalize
         if self.should_finalize_current_pack().await {
             self.finalize_current_pack().await?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Finalize the current packfile and create its reader
     async fn finalize_current_pack(&mut self) -> Result<()> {
         if let Some(writer) = self.current_writer.take() {
@@ -792,14 +848,14 @@ impl PackfileManager {
         if !self.pending_chunks.is_empty() {
             self.flush_packfile().await?;
         }
-        
+
         if self.current_writer.is_some() {
             self.finalize_current_pack().await?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Get statistics about packfile usage
     pub fn stats(&self) -> PackfileStats {
         let mut stats = PackfileStats {
@@ -879,7 +935,7 @@ mod tests {
         // Store the objects
         manager.store_packed(hash1, data1).await.unwrap();
         manager.store_packed(hash2, data2).await.unwrap();
-        
+
         // Finalize any pending writes
         manager.finalize().await.unwrap();
 
@@ -897,59 +953,59 @@ mod tests {
         assert_eq!(stats.total_objects, 2);
         assert!(stats.total_packed_size > 0);
     }
-    
+
     #[ignore = "Packfiles disabled for v1.0"]
     #[tokio::test]
     async fn test_packfile_writer_reader() {
         let dir = tempdir().unwrap();
         let pack_path = dir.path().join("test.pack");
         let config = PackfileConfig::default();
-        
+
         // Create writer and add chunks
         let mut writer = PackfileWriter::new(&pack_path, config).await.unwrap();
-        
+
         let data1 = b"First chunk data";
         let data2 = b"Second chunk data with more content";
         let data3 = b"Third chunk";
-        
+
         let mut hasher = Hasher::new();
         hasher.update(data1);
         let hash1 = ContentHash::from_blake3(hasher.finalize());
-        
+
         let mut hasher = Hasher::new();
         hasher.update(data2);
         let hash2 = ContentHash::from_blake3(hasher.finalize());
-        
+
         let mut hasher = Hasher::new();
         hasher.update(data3);
         let hash3 = ContentHash::from_blake3(hasher.finalize());
-        
+
         writer.add_chunk(&hash1, data1).await.unwrap();
         writer.add_chunk(&hash2, data2).await.unwrap();
         writer.add_chunk(&hash3, data3).await.unwrap();
-        
+
         assert_eq!(writer.chunk_count(), 3);
-        
+
         // Finalize and get reader
         let reader = writer.finalize().await.unwrap();
-        
+
         // Test reading chunks
         assert!(reader.contains_chunk(&hash1));
         assert!(reader.contains_chunk(&hash2));
         assert!(reader.contains_chunk(&hash3));
-        
+
         let read_data1 = reader.read_chunk(&hash1).await.unwrap();
         let read_data2 = reader.read_chunk(&hash2).await.unwrap();
         let read_data3 = reader.read_chunk(&hash3).await.unwrap();
-        
+
         assert_eq!(&read_data1[..], data1);
         assert_eq!(&read_data2[..], data2);
         assert_eq!(&read_data3[..], data3);
-        
+
         assert_eq!(reader.chunk_count(), 3);
         assert!(reader.total_size() > 0);
     }
-    
+
     #[ignore = "Packfiles disabled for v1.0"]
     #[tokio::test]
     async fn test_packfile_config_thresholds() {
@@ -960,33 +1016,38 @@ mod tests {
             min_chunks_per_pack: 2,
             compression: CompressionType::None,
         };
-        
-        let mut manager = PackfileManager::new_with_config(dir.path(), config).await.unwrap();
-        
+
+        let mut manager = PackfileManager::new_with_config(dir.path(), config)
+            .await
+            .unwrap();
+
         // Test threshold
         assert!(manager.should_pack(16)); // Below threshold
         assert!(manager.should_pack(32)); // At threshold
         assert!(!manager.should_pack(64)); // Above threshold
-        
+
         // Add chunks that should trigger packfile finalization
         let mut chunks = Vec::new();
-        
+
         for i in 0..5 {
             let chunk_data = format!("Test data chunk {}", i);
             let mut hasher = Hasher::new();
             hasher.update(chunk_data.as_bytes());
             let hash = ContentHash::from_blake3(hasher.finalize());
             chunks.push((hash, chunk_data.clone()));
-            
-            manager.add_chunk(hash, chunk_data.as_bytes()).await.unwrap();
+
+            manager
+                .add_chunk(hash, chunk_data.as_bytes())
+                .await
+                .unwrap();
         }
-        
+
         // Should have created at least one packfile
         manager.finalize().await.unwrap();
         let stats = manager.stats();
         assert!(stats.total_packs >= 1);
         assert_eq!(stats.total_objects, 5);
-        
+
         // Verify all chunks are readable
         for (hash, original_data) in &chunks {
             let read_data = manager.read_packed(hash).await.unwrap();

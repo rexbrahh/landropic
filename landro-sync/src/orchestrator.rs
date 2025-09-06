@@ -6,11 +6,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::conflict::{ConflictResolver, ConflictResolution};
+use crate::conflict::{ConflictResolution, ConflictResolver};
 use crate::errors::{Result, SyncError};
 use crate::progress::SyncProgress;
-use crate::scheduler::{TransferScheduler, TransferPriority, TransferRequest};
-use crate::state::{AsyncSyncDatabase, PeerSyncState, PeerState, SyncState};
+use crate::scheduler::{TransferPriority, TransferRequest, TransferScheduler};
+use crate::state::{AsyncSyncDatabase, PeerState, PeerSyncState, SyncState};
 
 /// Configuration for sync orchestrator
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ impl SyncOrchestrator {
     pub async fn new(config: SyncConfig) -> Result<Self> {
         let database = AsyncSyncDatabase::open(&config.database_path).await?;
         let peer_states = database.get_all_peer_states().await?;
-        
+
         let scheduler = TransferScheduler::new(config.max_concurrent_transfers);
         let conflict_resolver = ConflictResolver::new(config.default_conflict_resolution.clone());
 
@@ -74,7 +74,10 @@ impl SyncOrchestrator {
         // Check if already syncing with this peer
         let peer_states = self.peer_states.read().await;
         if let Some(peer_state) = peer_states.get(&peer_id) {
-            if matches!(peer_state.current_state, PeerState::Negotiating | PeerState::Transferring { .. }) {
+            if matches!(
+                peer_state.current_state,
+                PeerState::Negotiating | PeerState::Transferring { .. }
+            ) {
                 return Err(SyncError::AlreadySyncing(peer_id));
             }
         }
@@ -95,7 +98,7 @@ impl SyncOrchestrator {
 
         // Save to database and memory
         self.database.upsert_peer_state(&peer_state).await?;
-        
+
         {
             let mut peer_states = self.peer_states.write().await;
             peer_states.insert(peer_id.clone(), peer_state.clone());
@@ -104,11 +107,19 @@ impl SyncOrchestrator {
         // Update global sync state
         {
             let mut state = self.state.write().await;
-            let peer_count = self.peer_states.read().await
+            let peer_count = self
+                .peer_states
+                .read()
+                .await
                 .values()
-                .filter(|p| matches!(p.current_state, PeerState::Negotiating | PeerState::Transferring { .. }))
+                .filter(|p| {
+                    matches!(
+                        p.current_state,
+                        PeerState::Negotiating | PeerState::Transferring { .. }
+                    )
+                })
                 .count();
-            
+
             *state = SyncState::Syncing {
                 peer_count,
                 start_time: chrono::Utc::now(),
@@ -170,13 +181,15 @@ impl SyncOrchestrator {
         scheduler.schedule(request, priority);
 
         // Also add to database for persistence
-        self.database.add_pending_transfer(
-            &peer_id,
-            "default", // TODO: Get actual folder ID
-            &file_path,
-            &chunk_hash,
-            priority as i32,
-        ).await?;
+        self.database
+            .add_pending_transfer(
+                &peer_id,
+                "default", // TODO: Get actual folder ID
+                &file_path,
+                &chunk_hash,
+                priority as i32,
+            )
+            .await?;
 
         debug!("Scheduled transfer: {} ({})", file_path, chunk_hash);
         Ok(())
@@ -189,7 +202,12 @@ impl SyncOrchestrator {
     }
 
     /// Complete a transfer
-    pub async fn complete_transfer(&self, peer_id: &str, chunk_hash: &str, bytes: u64) -> Result<()> {
+    pub async fn complete_transfer(
+        &self,
+        peer_id: &str,
+        chunk_hash: &str,
+        bytes: u64,
+    ) -> Result<()> {
         // Update scheduler
         {
             let mut scheduler = self.scheduler.write().await;
@@ -230,7 +248,7 @@ impl SyncOrchestrator {
                     timestamp: chrono::Utc::now(),
                 };
                 peer_state.last_sync = Some(chrono::Utc::now());
-                
+
                 // Save to database
                 self.database.upsert_peer_state(peer_state).await?;
             }
@@ -241,9 +259,14 @@ impl SyncOrchestrator {
             let peer_states = self.peer_states.read().await;
             let active_count = peer_states
                 .values()
-                .filter(|p| matches!(p.current_state, PeerState::Negotiating | PeerState::Transferring { .. }))
+                .filter(|p| {
+                    matches!(
+                        p.current_state,
+                        PeerState::Negotiating | PeerState::Transferring { .. }
+                    )
+                })
                 .count();
-            
+
             if active_count == 0 {
                 let mut state = self.state.write().await;
                 *state = SyncState::Idle;
@@ -292,7 +315,10 @@ mod tests {
         };
 
         let orchestrator = SyncOrchestrator::new(config).await.unwrap();
-        orchestrator.start_sync("peer-1".to_string(), "Test Peer".to_string()).await.unwrap();
+        orchestrator
+            .start_sync("peer-1".to_string(), "Test Peer".to_string())
+            .await
+            .unwrap();
 
         let state = orchestrator.get_state().await;
         assert!(matches!(state, SyncState::Syncing { peer_count: 1, .. }));

@@ -146,9 +146,12 @@ impl Client {
     /// Get daemon and sync status
     pub async fn get_status(&self, folder: Option<PathBuf>) -> Result<StatusResponse> {
         let mut url = format!("{}/api/status", self.base_url);
-        
+
         if let Some(folder_path) = folder {
-            url.push_str(&format!("?folder={}", urlencoding::encode(&folder_path.to_string_lossy())));
+            url.push_str(&format!(
+                "?folder={}",
+                urlencoding::encode(&folder_path.to_string_lossy())
+            ));
         }
 
         let response = self
@@ -199,11 +202,17 @@ impl Client {
     }
 
     /// Get sync progress for a specific folder or all folders
-    pub async fn get_sync_progress(&self, folder: Option<&std::path::PathBuf>) -> Result<SyncProgressResponse> {
+    pub async fn get_sync_progress(
+        &self,
+        folder: Option<&std::path::PathBuf>,
+    ) -> Result<SyncProgressResponse> {
         let mut url = format!("{}/api/sync/progress", self.base_url);
-        
+
         if let Some(folder_path) = folder {
-            url.push_str(&format!("?folder={}", urlencoding::encode(&folder_path.to_string_lossy())));
+            url.push_str(&format!(
+                "?folder={}",
+                urlencoding::encode(&folder_path.to_string_lossy())
+            ));
         }
 
         let response = self
@@ -246,8 +255,7 @@ pub async fn start_daemon() -> Result<()> {
     }
 
     // Find the daemon binary - try multiple locations
-    let daemon_binary = find_daemon_binary()
-        .context("Could not find landropic daemon binary")?;
+    let daemon_binary = find_daemon_binary().context("Could not find landropic daemon binary")?;
 
     // Start the daemon in detached mode
     let mut cmd = Command::new(&daemon_binary);
@@ -268,8 +276,7 @@ pub async fn start_daemon() -> Result<()> {
         }
     }
 
-    cmd.spawn()
-        .context("Failed to start daemon process")?;
+    cmd.spawn().context("Failed to start daemon process")?;
 
     // Wait for daemon to start up
     let mut attempts = 0;

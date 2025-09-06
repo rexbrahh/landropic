@@ -1,9 +1,9 @@
 //! Atomic file operations for crash safety
 
+use blake3::Hasher;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use blake3::Hasher;
 use tracing::{debug, warn};
 
 use crate::errors::{CasError, Result};
@@ -21,8 +21,12 @@ impl AtomicWriter {
     /// Create a new atomic writer for the given path
     pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
         let final_path = path.as_ref().to_path_buf();
-        let temp_path = final_path.with_extension(format!("{}.tmp.{}", 
-            final_path.extension().and_then(|s| s.to_str()).unwrap_or(""),
+        let temp_path = final_path.with_extension(format!(
+            "{}.tmp.{}",
+            final_path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or(""),
             uuid::Uuid::new_v4().simple()
         ));
 
@@ -52,7 +56,9 @@ impl AtomicWriter {
             debug!("Wrote {} bytes to atomic writer", data.len());
             Ok(())
         } else {
-            Err(CasError::InvalidOperation("Writer already finalized".to_string()))
+            Err(CasError::InvalidOperation(
+                "Writer already finalized".to_string(),
+            ))
         }
     }
 
@@ -64,7 +70,9 @@ impl AtomicWriter {
             debug!("Flushed {} bytes to disk", self.bytes_written);
             Ok(())
         } else {
-            Err(CasError::InvalidOperation("Writer already finalized".to_string()))
+            Err(CasError::InvalidOperation(
+                "Writer already finalized".to_string(),
+            ))
         }
     }
 
@@ -80,8 +88,11 @@ impl AtomicWriter {
             fs::rename(&self.temp_path, &self.final_path).await?;
 
             let hash = self.hasher.finalize();
-            debug!("Committed atomic write: {} bytes, hash: {}", 
-                self.bytes_written, hash.to_hex());
+            debug!(
+                "Committed atomic write: {} bytes, hash: {}",
+                self.bytes_written,
+                hash.to_hex()
+            );
 
             Ok(AtomicWriteResult {
                 path: self.final_path,
@@ -89,7 +100,9 @@ impl AtomicWriter {
                 content_hash: hash.into(),
             })
         } else {
-            Err(CasError::InvalidOperation("Writer already finalized".to_string()))
+            Err(CasError::InvalidOperation(
+                "Writer already finalized".to_string(),
+            ))
         }
     }
 
@@ -99,7 +112,11 @@ impl AtomicWriter {
             // Close file and remove temp file
             if self.temp_path.exists() {
                 if let Err(e) = fs::remove_file(&self.temp_path).await {
-                    warn!("Failed to cleanup temp file {}: {}", self.temp_path.display(), e);
+                    warn!(
+                        "Failed to cleanup temp file {}: {}",
+                        self.temp_path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -133,7 +150,8 @@ pub async fn check_resumable_write(path: &Path) -> Option<ResumableWrite> {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let entry_path = entry.path();
                 if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with(&format!("{}.tmp.", 
+                    if name.starts_with(&format!(
+                        "{}.tmp.",
                         path.file_name().and_then(|n| n.to_str()).unwrap_or("")
                     )) {
                         // Found a temp file that might be resumable
@@ -165,7 +183,7 @@ impl ResumableWrite {
     pub async fn resume(self) -> Result<AtomicWriter> {
         // Verify temp file integrity
         let existing_data = fs::read(&self.temp_path).await?;
-        
+
         if existing_data.len() != self.bytes_written as usize {
             warn!("Temp file size mismatch, starting fresh write");
             fs::remove_file(&self.temp_path).await.ok();
@@ -183,7 +201,10 @@ impl ResumableWrite {
         let mut hasher = Hasher::new();
         hasher.update(&existing_data);
 
-        debug!("Resumed atomic write: {} bytes already written", self.bytes_written);
+        debug!(
+            "Resumed atomic write: {} bytes already written",
+            self.bytes_written
+        );
 
         Ok(AtomicWriter {
             final_path: self.original_path,
@@ -212,9 +233,7 @@ impl AtomicDirectory {
     /// Create a new atomic directory operation
     pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
         let final_path = path.as_ref().to_path_buf();
-        let temp_path = final_path.with_extension(format!("tmp.{}", 
-            uuid::Uuid::new_v4().simple()
-        ));
+        let temp_path = final_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4().simple()));
 
         // Create temporary directory
         fs::create_dir_all(&temp_path).await?;
@@ -243,7 +262,7 @@ impl AtomicDirectory {
 
         // Atomic move
         fs::rename(&self.temp_path, &self.final_path).await?;
-        
+
         debug!("Committed atomic directory: {}", self.final_path.display());
         Ok(self.final_path)
     }
@@ -271,17 +290,17 @@ mod tests {
         let mut writer = AtomicWriter::new(&test_file).await.unwrap();
         writer.write(b"Hello, ").await.unwrap();
         writer.write(b"World!").await.unwrap();
-        
+
         // File shouldn't exist yet
         assert!(!test_file.exists());
-        
+
         // Commit the write
         let result = writer.commit().await.unwrap();
-        
+
         // Now file should exist
         assert!(test_file.exists());
         assert_eq!(result.bytes_written, 13);
-        
+
         // Verify content
         let content = fs::read_to_string(&test_file).await.unwrap();
         assert_eq!(content, "Hello, World!");
@@ -294,10 +313,10 @@ mod tests {
 
         let mut writer = AtomicWriter::new(&test_file).await.unwrap();
         writer.write(b"This should be discarded").await.unwrap();
-        
+
         // Abort the write
         writer.abort().await.unwrap();
-        
+
         // File shouldn't exist
         assert!(!test_file.exists());
     }
@@ -311,25 +330,25 @@ mod tests {
         let mut writer = AtomicWriter::new(&test_file).await.unwrap();
         writer.write(b"Part 1").await.unwrap();
         writer.flush().await.unwrap();
-        
+
         // Simulate crash - don't commit, just drop
         let temp_path = writer.temp_path.clone();
         drop(writer);
-        
+
         // Check for resumable write
         let resumable = check_resumable_write(&test_file).await;
         assert!(resumable.is_some());
-        
+
         let resumable = resumable.unwrap();
         assert_eq!(resumable.bytes_written, 6);
-        
+
         // Resume writing
         let mut resumed_writer = resumable.resume().await.unwrap();
         resumed_writer.write(b" Part 2").await.unwrap();
-        
+
         let result = resumed_writer.commit().await.unwrap();
         assert_eq!(result.bytes_written, 13);
-        
+
         // Verify final content
         let content = fs::read_to_string(&test_file).await.unwrap();
         assert_eq!(content, "Part 1 Part 2");

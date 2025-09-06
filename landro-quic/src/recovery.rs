@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 use crate::client::QuicClient;
 use crate::connection::Connection;
@@ -70,14 +70,14 @@ impl RetryPolicy {
         let base_delay_ms = self.base_delay.as_millis() as f64;
         let multiplier = self.backoff_multiplier.powi(attempt as i32 - 1);
         let delay_ms = base_delay_ms * multiplier;
-        
+
         // Apply maximum delay cap
         let delay_ms = delay_ms.min(self.max_delay.as_millis() as f64);
-        
+
         // Apply jitter to avoid thundering herd
         let jitter = 1.0 + (rand::random::<f64>() - 0.5) * 2.0 * self.jitter_factor;
         let final_delay_ms = delay_ms * jitter;
-        
+
         Duration::from_millis(final_delay_ms.max(0.0) as u64)
     }
 }
@@ -85,9 +85,9 @@ impl RetryPolicy {
 /// Circuit breaker state for connection health management
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CircuitState {
-    Closed,    // Normal operation
-    Open,      // Failing, reject requests
-    HalfOpen,  // Testing if service recovered
+    Closed,   // Normal operation
+    Open,     // Failing, reject requests
+    HalfOpen, // Testing if service recovered
 }
 
 /// Circuit breaker for connection failure detection
@@ -97,7 +97,7 @@ pub struct CircuitBreaker {
     failure_count: u32,
     success_count: u32,
     last_failure: Option<Instant>,
-    
+
     // Configuration
     failure_threshold: u32,
     success_threshold: u32,
@@ -168,12 +168,15 @@ impl CircuitBreaker {
     /// Record a failed operation
     pub fn record_failure(&mut self) {
         self.last_failure = Some(Instant::now());
-        
+
         match self.state {
             CircuitState::Closed => {
                 self.failure_count += 1;
                 if self.failure_count >= self.failure_threshold {
-                    warn!("Circuit breaker opening due to {} failures", self.failure_count);
+                    warn!(
+                        "Circuit breaker opening due to {} failures",
+                        self.failure_count
+                    );
                     self.state = CircuitState::Open;
                 }
             }
@@ -211,17 +214,21 @@ impl RecoveryClient {
     }
 
     /// Connect with automatic retry and circuit breaking
-    pub async fn connect_with_recovery(&self, addr: std::net::SocketAddr) -> Result<Arc<Connection>> {
+    pub async fn connect_with_recovery(
+        &self,
+        addr: std::net::SocketAddr,
+    ) -> Result<Arc<Connection>> {
         // Check circuit breaker
         {
             let mut breakers = self.circuit_breakers.write().await;
-            let breaker = breakers.entry(addr).or_insert_with(|| {
-                CircuitBreaker::new(3, 2, Duration::from_secs(30))
-            });
+            let breaker = breakers
+                .entry(addr)
+                .or_insert_with(|| CircuitBreaker::new(3, 2, Duration::from_secs(30)));
 
             if !breaker.allow_request() {
                 return Err(QuicError::Protocol(format!(
-                    "Circuit breaker open for peer {}, rejecting request", addr
+                    "Circuit breaker open for peer {}, rejecting request",
+                    addr
                 )));
             }
         }
@@ -231,15 +238,20 @@ impl RecoveryClient {
         for attempt in 0..self.retry_policy.max_attempts {
             if attempt > 0 {
                 let delay = self.retry_policy.calculate_delay(attempt);
-                debug!("Retrying connection to {} after {:?} (attempt {}/{})", 
-                    addr, delay, attempt + 1, self.retry_policy.max_attempts);
+                debug!(
+                    "Retrying connection to {} after {:?} (attempt {}/{})",
+                    addr,
+                    delay,
+                    attempt + 1,
+                    self.retry_policy.max_attempts
+                );
                 sleep(delay).await;
             }
 
             match self.inner.connect_addr(addr).await {
                 Ok(connection) => {
                     info!("Connected to {} on attempt {}", addr, attempt + 1);
-                    
+
                     // Record success in circuit breaker
                     {
                         let mut breakers = self.circuit_breakers.write().await;
@@ -251,7 +263,12 @@ impl RecoveryClient {
                     return Ok(Arc::new(connection));
                 }
                 Err(e) => {
-                    error!("Connection attempt {} to {} failed: {}", attempt + 1, addr, e);
+                    error!(
+                        "Connection attempt {} to {} failed: {}",
+                        attempt + 1,
+                        addr,
+                        e
+                    );
                     last_error = Some(e.clone());
 
                     // Record failure in circuit breaker
@@ -272,7 +289,10 @@ impl RecoveryClient {
         }
 
         Err(last_error.unwrap_or_else(|| {
-            QuicError::Protocol(format!("All {} connection attempts failed", self.retry_policy.max_attempts))
+            QuicError::Protocol(format!(
+                "All {} connection attempts failed",
+                self.retry_policy.max_attempts
+            ))
         }))
     }
 
@@ -287,17 +307,26 @@ impl RecoveryClient {
         for attempt in 0..self.retry_policy.max_attempts {
             if attempt > 0 {
                 let delay = self.retry_policy.calculate_delay(attempt);
-                debug!("Retrying operation for {} after {:?} (attempt {}/{})", 
-                    addr, delay, attempt + 1, self.retry_policy.max_attempts);
+                debug!(
+                    "Retrying operation for {} after {:?} (attempt {}/{})",
+                    addr,
+                    delay,
+                    attempt + 1,
+                    self.retry_policy.max_attempts
+                );
                 sleep(delay).await;
             }
 
             match operation().await {
                 Ok(result) => {
                     if attempt > 0 {
-                        info!("Operation succeeded for {} on attempt {}", addr, attempt + 1);
+                        info!(
+                            "Operation succeeded for {} on attempt {}",
+                            addr,
+                            attempt + 1
+                        );
                     }
-                    
+
                     // Record success in circuit breaker
                     {
                         let mut breakers = self.circuit_breakers.write().await;
@@ -309,7 +338,12 @@ impl RecoveryClient {
                     return Ok(result);
                 }
                 Err(e) => {
-                    debug!("Operation attempt {} for {} failed: {}", attempt + 1, addr, e);
+                    debug!(
+                        "Operation attempt {} for {} failed: {}",
+                        attempt + 1,
+                        addr,
+                        e
+                    );
                     last_error = Some(e.clone());
 
                     // Record failure in circuit breaker
@@ -330,14 +364,18 @@ impl RecoveryClient {
         }
 
         Err(last_error.unwrap_or_else(|| {
-            QuicError::Protocol(format!("All {} operation attempts failed", self.retry_policy.max_attempts))
+            QuicError::Protocol(format!(
+                "All {} operation attempts failed",
+                self.retry_policy.max_attempts
+            ))
         }))
     }
 
     /// Get circuit breaker states for monitoring
     pub async fn get_circuit_states(&self) -> HashMap<std::net::SocketAddr, CircuitState> {
         let breakers = self.circuit_breakers.read().await;
-        breakers.iter()
+        breakers
+            .iter()
             .map(|(addr, breaker)| (*addr, breaker.state()))
             .collect()
     }
@@ -437,7 +475,7 @@ impl ConnectionHealthMonitor {
 
             // Perform basic connectivity check
             let start = Instant::now();
-            
+
             // For now, just check if we can open a stream
             // In a real implementation, you might send a ping message
             match conn.open_uni().await {
@@ -452,7 +490,7 @@ impl ConnectionHealthMonitor {
                         health.ping_failures = 0;
                         health.avg_rtt = Some(match health.avg_rtt {
                             Some(existing) => Duration::from_nanos(
-                                ((existing.as_nanos() + rtt.as_nanos()) / 2) as u64
+                                ((existing.as_nanos() + rtt.as_nanos()) / 2) as u64,
                             ),
                             None => rtt,
                         });
@@ -464,10 +502,12 @@ impl ConnectionHealthMonitor {
                     let mut conns = connections.write().await;
                     if let Some(health) = conns.get_mut(id) {
                         health.ping_failures += 1;
-                        
+
                         if health.ping_failures >= 3 {
-                            warn!("Connection {} failed health check {} times, removing", 
-                                id, health.ping_failures);
+                            warn!(
+                                "Connection {} failed health check {} times, removing",
+                                id, health.ping_failures
+                            );
                             conns.remove(id);
                         }
                     }
@@ -483,10 +523,9 @@ impl ConnectionHealthMonitor {
     /// Get health statistics for all connections
     pub async fn get_health_stats(&self) -> HashMap<String, (u32, Option<Duration>)> {
         let connections = self.connections.read().await;
-        connections.iter()
-            .map(|(id, health)| {
-                (id.clone(), (health.ping_failures, health.avg_rtt))
-            })
+        connections
+            .iter()
+            .map(|(id, health)| (id.clone(), (health.ping_failures, health.avg_rtt)))
             .collect()
     }
 }
@@ -498,13 +537,13 @@ mod tests {
     #[test]
     fn test_retry_policy_delay_calculation() {
         let policy = RetryPolicy::default();
-        
+
         assert_eq!(policy.calculate_delay(0), Duration::ZERO);
-        
+
         let delay1 = policy.calculate_delay(1);
         assert!(delay1 >= Duration::from_millis(450)); // With jitter
         assert!(delay1 <= Duration::from_millis(550));
-        
+
         let delay2 = policy.calculate_delay(2);
         assert!(delay2 > delay1); // Should be longer due to backoff
     }
@@ -512,20 +551,20 @@ mod tests {
     #[test]
     fn test_circuit_breaker_state_transitions() {
         let mut breaker = CircuitBreaker::new(2, 1, Duration::from_secs(1));
-        
+
         assert_eq!(breaker.state(), CircuitState::Closed);
         assert!(breaker.allow_request());
-        
+
         // First failure
         breaker.record_failure();
         assert_eq!(breaker.state(), CircuitState::Closed);
         assert!(breaker.allow_request());
-        
+
         // Second failure - should open
         breaker.record_failure();
         assert_eq!(breaker.state(), CircuitState::Open);
         assert!(!breaker.allow_request()); // Should be rejected
-        
+
         // Success should close it when half-open
         breaker.state = CircuitState::HalfOpen;
         breaker.record_success();

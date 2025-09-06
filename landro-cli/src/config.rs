@@ -14,15 +14,15 @@ impl Config {
     /// Save configuration to the default location
     pub fn save(&self) -> Result<()> {
         let config_path = get_config_path()?;
-        
+
         // Ensure directory exists
         if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
 
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize config to TOML")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize config to TOML")?;
 
         std::fs::write(&config_path, content)
             .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
@@ -33,7 +33,7 @@ impl Config {
     /// Load configuration from the default location
     pub fn load() -> Result<Config> {
         let config_path = get_config_path()?;
-        
+
         let content = std::fs::read_to_string(&config_path)
             .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
 
@@ -52,23 +52,21 @@ impl Config {
 
 /// Get the path to the config file
 pub fn get_config_path() -> Result<PathBuf> {
-    let home = dirs::home_dir()
-        .context("Home directory not found")?;
+    let home = dirs::home_dir().context("Home directory not found")?;
     Ok(home.join(".landropic").join("config.toml"))
 }
 
 /// Get the default storage path
 pub fn default_storage_path() -> Result<PathBuf> {
-    let home = dirs::home_dir()
-        .context("Home directory not found")?;
+    let home = dirs::home_dir().context("Home directory not found")?;
     Ok(home.join(".landropic").join("storage"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::env;
+    use tempfile::tempdir;
 
     #[test]
     fn test_config_serialization() {
@@ -95,7 +93,7 @@ mod tests {
     fn test_save_and_load_config() {
         let temp_dir = tempdir().unwrap();
         let old_home = env::var("HOME").ok();
-        
+
         // Set temporary HOME directory
         env::set_var("HOME", temp_dir.path());
 

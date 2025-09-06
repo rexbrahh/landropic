@@ -7,24 +7,23 @@
 //! 4. ChunkData → Transfer content
 //! 5. Ack → Confirm receipt
 
+use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::{DateTime, Utc};
-use tracing::{debug, info, warn, error, trace};
+use tracing::{debug, error, info, trace, warn};
 
-use landro_proto::generated::{
-    Hello, FolderSummary, Manifest as ProtoManifest, FileEntry as ProtoFileEntry,
-    Want, ChunkData, Ack, Error as ProtoError,
-    error::ErrorType,
-};
-use landro_index::manifest::{Manifest, ManifestEntry};
 use landro_cas::ContentStore;
 use landro_chunker::ContentHash;
+use landro_index::manifest::{Manifest, ManifestEntry};
+use landro_proto::generated::{
+    error::ErrorType, Ack, ChunkData, Error as ProtoError, FileEntry as ProtoFileEntry,
+    FolderSummary, Hello, Manifest as ProtoManifest, Want,
+};
 
 use crate::diff::{DiffComputer, DiffResult, IncrementalDiff};
 use crate::errors::{Result, SyncError};
-use crate::state::{PeerSyncState, PeerState, AsyncSyncDatabase};
+use crate::state::{AsyncSyncDatabase, PeerState, PeerSyncState};
 
 /// Sync protocol version
 pub const PROTOCOL_VERSION: &str = "1.0.0";
@@ -111,10 +110,10 @@ impl SyncSession {
         database: AsyncSyncDatabase,
     ) -> Self {
         let session_id = format!("{}_{}", peer_id, Utc::now().timestamp());
-        
+
         // Create chunk cache from CAS
         let chunk_cache = Arc::new(HashSet::new()); // TODO: Load from CAS
-        
+
         Self {
             session_id: session_id.clone(),
             peer_id,
@@ -142,7 +141,7 @@ impl SyncSession {
     /// Process Hello message
     pub async fn handle_hello(&self, hello: Hello) -> Result<Hello> {
         let mut state = self.state.write().await;
-        
+
         if *state != SessionState::Initializing {
             return Err(SyncError::Protocol(format!(
                 "Unexpected Hello in state {:?}",
@@ -185,7 +184,7 @@ impl SyncSession {
     /// Process FolderSummary message
     pub async fn handle_folder_summary(&self, summary: FolderSummary) -> Result<FolderSummary> {
         let mut state = self.state.write().await;
-        
+
         if *state != SessionState::Negotiating {
             return Err(SyncError::Protocol(format!(
                 "Unexpected FolderSummary in state {:?}",
@@ -208,7 +207,8 @@ impl SyncSession {
         Ok(FolderSummary {
             folder_id: summary.folder_id,
             folder_path: "/sync".to_string(), // TODO: Get from config
-            manifest_hash: our_manifest.manifest_hash
+            manifest_hash: our_manifest
+                .manifest_hash
                 .as_ref()
                 .map(|h| hex::decode(h).unwrap_or_default())
                 .unwrap_or_default(),
@@ -221,7 +221,7 @@ impl SyncSession {
     /// Process Manifest message
     pub async fn handle_manifest(&self, manifest: ProtoManifest) -> Result<Want> {
         let mut state = self.state.write().await;
-        
+
         if *state != SessionState::ComputingDiff {
             return Err(SyncError::Protocol(format!(
                 "Unexpected Manifest in state {:?}",
@@ -240,18 +240,18 @@ impl SyncSession {
 
         // Convert proto manifest to our format
         let peer_manifest = self.proto_to_manifest(manifest)?;
-        let our_manifest = self.our_manifest.read().await
+        let our_manifest = self
+            .our_manifest
+            .read()
+            .await
             .as_ref()
             .ok_or_else(|| SyncError::Protocol("Our manifest not loaded".to_string()))?
             .clone();
 
         // Compute diff
         let mut diff_tracker = self.diff_tracker.write().await;
-        let diff = diff_tracker.compute_incremental(
-            &self.peer_id,
-            &our_manifest,
-            &peer_manifest,
-        )?;
+        let diff =
+            diff_tracker.compute_incremental(&self.peer_id, &our_manifest, &peer_manifest)?;
 
         info!(
             "[{}] Diff computed: {} added, {} modified, {} deleted",
@@ -271,7 +271,8 @@ impl SyncSession {
         stats.files_deleted = diff.stats.files_deleted;
 
         // Determine chunks we need
-        let wanted: Vec<Vec<u8>> = diff.required_chunks
+        let wanted: Vec<Vec<u8>> = diff
+            .required_chunks
             .iter()
             .take(MAX_WANT_CHUNKS)
             .map(|h| hex::decode(h).unwrap_or_default())
@@ -296,7 +297,7 @@ impl SyncSession {
     /// Process Want message (peer requesting chunks)
     pub async fn handle_want(&self, want: Want) -> Result<Vec<ChunkData>> {
         let state = self.state.read().await;
-        
+
         if !matches!(*state, SessionState::Transferring { .. }) {
             return Err(SyncError::Protocol(format!(
                 "Unexpected Want in state {:?}",
@@ -315,7 +316,7 @@ impl SyncSession {
 
         for hash_bytes in want.chunk_hashes.iter().take(MAX_CONCURRENT_TRANSFERS) {
             let hash_str = hex::encode(hash_bytes);
-            
+
             // Skip if already sent
             if self.sent_chunks.read().await.contains(&hash_str) {
                 continue;
@@ -324,9 +325,13 @@ impl SyncSession {
             // Try to load chunk from CAS
             match self.load_chunk(&hash_str).await {
                 Ok(data) => {
-                    trace!("[{}] Sending chunk {} ({} bytes)", 
-                           self.session_id, hash_str, data.len());
-                    
+                    trace!(
+                        "[{}] Sending chunk {} ({} bytes)",
+                        self.session_id,
+                        hash_str,
+                        data.len()
+                    );
+
                     chunks.push(ChunkData {
                         hash: hash_bytes.clone(),
                         data: data.clone(),
@@ -339,8 +344,10 @@ impl SyncSession {
                     stats.bytes_sent += data.len() as u64;
                 }
                 Err(e) => {
-                    warn!("[{}] Failed to load chunk {}: {}", 
-                          self.session_id, hash_str, e);
+                    warn!(
+                        "[{}] Failed to load chunk {}: {}",
+                        self.session_id, hash_str, e
+                    );
                 }
             }
         }
@@ -358,14 +365,14 @@ impl SyncSession {
 
         // Update our tracking of what peer has
         // This is useful for optimizing future transfers
-        
+
         Ok(())
     }
 
     /// Process ChunkData message
     pub async fn handle_chunk_data(&self, chunk: ChunkData) -> Result<Ack> {
         let mut state = self.state.write().await;
-        
+
         if !matches!(*state, SessionState::Transferring { .. }) {
             return Err(SyncError::Protocol(format!(
                 "Unexpected ChunkData in state {:?}",
@@ -403,9 +410,13 @@ impl SyncSession {
         stats.bytes_received += chunk.data.len() as u64;
 
         // Update state progress
-        if let SessionState::Transferring { total_chunks, transferred_chunks } = *state {
+        if let SessionState::Transferring {
+            total_chunks,
+            transferred_chunks,
+        } = *state
+        {
             let new_transferred = transferred_chunks + 1;
-            
+
             if new_transferred >= total_chunks {
                 info!("[{}] All chunks received, verifying...", self.session_id);
                 *state = SessionState::Verifying;
@@ -414,7 +425,7 @@ impl SyncSession {
                     total_chunks,
                     transferred_chunks: new_transferred,
                 };
-                
+
                 if new_transferred % 10 == 0 {
                     let progress = (new_transferred as f64 / total_chunks as f64) * 100.0;
                     info!("[{}] Transfer progress: {:.1}%", self.session_id, progress);
@@ -432,7 +443,10 @@ impl SyncSession {
     /// Process Ack message
     pub async fn handle_ack(&self, ack: Ack) -> Result<()> {
         if !ack.success {
-            warn!("[{}] Received negative ack: {}", self.session_id, ack.message);
+            warn!(
+                "[{}] Received negative ack: {}",
+                self.session_id, ack.message
+            );
         }
 
         // Check if we're done
@@ -442,7 +456,7 @@ impl SyncSession {
             if self.verify_transfer().await? {
                 *self.state.write().await = SessionState::Completed;
                 info!("[{}] Sync completed successfully", self.session_id);
-                
+
                 // Update database
                 self.update_peer_state().await?;
             } else {
@@ -458,13 +472,11 @@ impl SyncSession {
     pub async fn handle_error(&self, error: ProtoError) -> Result<()> {
         error!(
             "[{}] Received error from peer: {} - {}",
-            self.session_id,
-            error.message,
-            error.details
+            self.session_id, error.message, error.details
         );
 
         *self.state.write().await = SessionState::Failed(error.message.clone());
-        
+
         Ok(())
     }
 
@@ -477,43 +489,41 @@ impl SyncSession {
     /// Convert proto manifest to our format
     fn proto_to_manifest(&self, proto: ProtoManifest) -> Result<Manifest> {
         let mut manifest = Manifest::new(proto.folder_id, 1);
-        
+
         for file in proto.files {
             let entry = ManifestEntry {
                 path: file.path,
                 size: file.size,
-                modified_at: file.modified
-                    .and_then(|t| {
-                        DateTime::from_timestamp(t.seconds, t.nanos as u32)
-                    })
+                modified_at: file
+                    .modified
+                    .and_then(|t| DateTime::from_timestamp(t.seconds, t.nanos as u32))
                     .unwrap_or_else(Utc::now),
                 content_hash: hex::encode(&file.content_hash),
-                chunk_hashes: file.chunk_hashes
-                    .iter()
-                    .map(|h| hex::encode(h))
-                    .collect(),
+                chunk_hashes: file.chunk_hashes.iter().map(|h| hex::encode(h)).collect(),
                 mode: Some(file.mode),
             };
             manifest.add_file(entry);
         }
-        
+
         manifest.finalize();
         Ok(manifest)
     }
 
     /// Load chunk from CAS
     async fn load_chunk(&self, hash: &str) -> Result<Vec<u8>> {
-        let hash_bytes = hex::decode(hash)
-            .map_err(|e| SyncError::Protocol(format!("Invalid hash: {}", e)))?;
-        
+        let hash_bytes =
+            hex::decode(hash).map_err(|e| SyncError::Protocol(format!("Invalid hash: {}", e)))?;
+
         let mut hash_array = [0u8; 32];
         hash_array.copy_from_slice(&hash_bytes[..32]);
         let content_hash = ContentHash::from_bytes(hash_array);
-        
-        let bytes = self.cas.read(&content_hash)
+
+        let bytes = self
+            .cas
+            .read(&content_hash)
             .await
             .map_err(|e| SyncError::Storage(format!("Failed to load chunk: {}", e)))?;
-        
+
         Ok(bytes.to_vec())
     }
 
@@ -521,9 +531,9 @@ impl SyncSession {
     async fn store_chunk(&self, hash: &str, data: Vec<u8>) -> Result<()> {
         // Verify hash matches data
         let computed_hash = blake3::hash(&data);
-        let hash_bytes = hex::decode(hash)
-            .map_err(|e| SyncError::Protocol(format!("Invalid hash: {}", e)))?;
-        
+        let hash_bytes =
+            hex::decode(hash).map_err(|e| SyncError::Protocol(format!("Invalid hash: {}", e)))?;
+
         if computed_hash.as_bytes() != hash_bytes.as_slice() {
             return Err(SyncError::Protocol(format!(
                 "Hash mismatch: expected {}, got {}",
@@ -531,11 +541,12 @@ impl SyncSession {
                 hex::encode(computed_hash.as_bytes())
             )));
         }
-        
-        self.cas.write(&data)
+
+        self.cas
+            .write(&data)
             .await
             .map_err(|e| SyncError::Storage(format!("Failed to store chunk: {}", e)))?;
-        
+
         Ok(())
     }
 
@@ -543,7 +554,7 @@ impl SyncSession {
     async fn verify_transfer(&self) -> Result<bool> {
         let wanted = self.wanted_chunks.read().await;
         let received = self.received_chunks.read().await;
-        
+
         if !wanted.is_empty() {
             warn!(
                 "[{}] Still missing {} chunks",
@@ -552,13 +563,13 @@ impl SyncSession {
             );
             return Ok(false);
         }
-        
+
         debug!(
             "[{}] Verification complete: {} chunks received",
             self.session_id,
             received.len()
         );
-        
+
         Ok(true)
     }
 
@@ -566,13 +577,12 @@ impl SyncSession {
     async fn update_peer_state(&self) -> Result<()> {
         let stats = self.stats.read().await;
         let our_manifest = self.our_manifest.read().await;
-        
+
         let peer_state = PeerSyncState {
             peer_id: self.peer_id.clone(),
             peer_name: self.peer_name.clone(),
             last_sync: Some(Utc::now()),
-            last_manifest_hash: our_manifest.as_ref()
-                .and_then(|m| m.manifest_hash.clone()),
+            last_manifest_hash: our_manifest.as_ref().and_then(|m| m.manifest_hash.clone()),
             bytes_sent: stats.bytes_sent,
             bytes_received: stats.bytes_received,
             files_sent: stats.chunks_sent as u64,
@@ -581,9 +591,9 @@ impl SyncSession {
                 timestamp: Utc::now(),
             },
         };
-        
+
         self.database.upsert_peer_state(&peer_state).await?;
-        
+
         Ok(())
     }
 
@@ -597,7 +607,11 @@ impl SyncSession {
 
     /// Get transfer progress
     pub async fn get_progress(&self) -> f64 {
-        if let SessionState::Transferring { total_chunks, transferred_chunks } = &*self.state.read().await {
+        if let SessionState::Transferring {
+            total_chunks,
+            transferred_chunks,
+        } = &*self.state.read().await
+        {
             if *total_chunks > 0 {
                 return (*transferred_chunks as f64 / *total_chunks as f64) * 100.0;
             }
@@ -628,26 +642,21 @@ mod tests {
         let cas = Arc::new(
             ContentStore::new(temp_dir.path().join("cas"))
                 .await
-                .unwrap()
+                .unwrap(),
         );
         let db = AsyncSyncDatabase::open_in_memory().await.unwrap();
-        
-        let session = SyncSession::new(
-            "test-peer".to_string(),
-            "Test Device".to_string(),
-            cas,
-            db,
-        );
-        
+
+        let session = SyncSession::new("test-peer".to_string(), "Test Device".to_string(), cas, db);
+
         (session, temp_dir)
     }
 
     #[tokio::test]
     async fn test_session_state_transitions() {
         let (session, _temp) = create_test_session().await;
-        
+
         assert_eq!(session.state().await, SessionState::Initializing);
-        
+
         // Process Hello
         let hello = Hello {
             version: PROTOCOL_VERSION.to_string(),
@@ -656,7 +665,7 @@ mod tests {
             capabilities: vec!["sync.v1".to_string()],
             timestamp: Some(prost_types::Timestamp::from(std::time::SystemTime::now())),
         };
-        
+
         let _response = session.handle_hello(hello).await.unwrap();
         assert_eq!(session.state().await, SessionState::Negotiating);
     }
@@ -672,11 +681,19 @@ mod tests {
     #[tokio::test]
     async fn test_chunk_tracking() {
         let (session, _temp) = create_test_session().await;
-        
+
         // Simulate receiving chunks
-        session.received_chunks.write().await.insert("chunk1".to_string());
-        session.received_chunks.write().await.insert("chunk2".to_string());
-        
+        session
+            .received_chunks
+            .write()
+            .await
+            .insert("chunk1".to_string());
+        session
+            .received_chunks
+            .write()
+            .await
+            .insert("chunk2".to_string());
+
         let received = session.received_chunks.read().await;
         assert_eq!(received.len(), 2);
         assert!(received.contains("chunk1"));
@@ -686,7 +703,7 @@ mod tests {
     #[tokio::test]
     async fn test_stats_tracking() {
         let (session, _temp) = create_test_session().await;
-        
+
         // Update stats
         {
             let mut stats = session.stats.write().await;
@@ -695,7 +712,7 @@ mod tests {
             stats.chunks_sent = 5;
             stats.chunks_received = 10;
         }
-        
+
         let stats = session.get_stats().await;
         assert_eq!(stats.bytes_sent, 1024);
         assert_eq!(stats.bytes_received, 2048);

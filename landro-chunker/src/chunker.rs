@@ -22,7 +22,7 @@ impl Default for ChunkerConfig {
     fn default() -> Self {
         Self {
             min_size: 256 * 1024,      // 256 KB
-            avg_size: 1024 * 1024,     // 1 MB  
+            avg_size: 1024 * 1024,     // 1 MB
             max_size: 4 * 1024 * 1024, // 4 MB
             mask_bits: 20,             // For 1MB average (2^20 = 1048576)
         }
@@ -43,22 +43,24 @@ impl ChunkerConfig {
                 "avg_size must be less than max_size".to_string(),
             ));
         }
-        
+
         // Validate absolute limits (using proto validation limits)
-        const MIN_CHUNK_SIZE: usize = 256;  // 256 bytes minimum
-        const MAX_CHUNK_SIZE: usize = 16 * 1024 * 1024;  // 16 MB maximum
-        
+        const MIN_CHUNK_SIZE: usize = 256; // 256 bytes minimum
+        const MAX_CHUNK_SIZE: usize = 16 * 1024 * 1024; // 16 MB maximum
+
         if self.min_size < MIN_CHUNK_SIZE {
-            return Err(ChunkerError::InvalidConfig(
-                format!("min_size {} is below minimum {}", self.min_size, MIN_CHUNK_SIZE),
-            ));
+            return Err(ChunkerError::InvalidConfig(format!(
+                "min_size {} is below minimum {}",
+                self.min_size, MIN_CHUNK_SIZE
+            )));
         }
         if self.max_size > MAX_CHUNK_SIZE {
-            return Err(ChunkerError::InvalidConfig(
-                format!("max_size {} exceeds maximum {}", self.max_size, MAX_CHUNK_SIZE),
-            ));
+            return Err(ChunkerError::InvalidConfig(format!(
+                "max_size {} exceeds maximum {}",
+                self.max_size, MAX_CHUNK_SIZE
+            )));
         }
-        
+
         if self.mask_bits == 0 || self.mask_bits > 32 {
             return Err(ChunkerError::InvalidConfig(
                 "mask_bits must be between 1 and 32".to_string(),
@@ -265,7 +267,7 @@ impl Chunker {
     /// algorithm with a rolling hash over a sliding window.
     fn find_chunk_boundary(&self, data: &[u8], start_pos: usize, max_pos: usize) -> usize {
         const WINDOW_SIZE: usize = 48;
-        
+
         if start_pos >= data.len() || start_pos >= max_pos {
             return max_pos.min(data.len());
         }
@@ -276,11 +278,13 @@ impl Chunker {
         }
 
         let mut hash = 0u64;
-        
+
         // Initialize hash with first WINDOW_SIZE bytes using the standard rolling hash formula
         for i in 0..WINDOW_SIZE {
             let byte = data[start_pos + i];
-            hash = hash.rotate_left(1).wrapping_add(self.gear_table[byte as usize]);
+            hash = hash
+                .rotate_left(1)
+                .wrapping_add(self.gear_table[byte as usize]);
         }
 
         // Now scan for chunk boundary
@@ -288,12 +292,15 @@ impl Chunker {
             // Update rolling hash by removing oldest byte and adding new byte
             let old_byte = data[pos - WINDOW_SIZE];
             let new_byte = data[pos];
-            
+
             // Remove the oldest byte's contribution (it has been rotated left WINDOW_SIZE times)
             // and add the new byte
-            let old_contribution = self.gear_table[old_byte as usize].rotate_left(WINDOW_SIZE as u32);
+            let old_contribution =
+                self.gear_table[old_byte as usize].rotate_left(WINDOW_SIZE as u32);
             hash = hash.wrapping_sub(old_contribution);
-            hash = hash.rotate_left(1).wrapping_add(self.gear_table[new_byte as usize]);
+            hash = hash
+                .rotate_left(1)
+                .wrapping_add(self.gear_table[new_byte as usize]);
 
             // Check if we found a boundary by testing if the hash matches our mask
             if (hash & self.mask) == 0 {
@@ -313,17 +320,17 @@ impl Chunker {
     fn generate_gear_table() -> [u64; 256] {
         let mut table = [0u64; 256];
         let mut state = 0x45aa_bbcc_ddee_ff00u64; // Fixed seed for deterministic results
-        
+
         for i in 0..256 {
             // Use xorshift algorithm for pseudo-random generation
             state ^= state << 13;
             state ^= state >> 7;
             state ^= state << 17;
-            
+
             // Ensure good distribution by mixing with index
             table[i] = state.wrapping_add((i as u64).wrapping_mul(0x517c_c1b7_2722_0a95));
         }
-        
+
         table
     }
 }
@@ -449,7 +456,7 @@ mod tests {
         fn test_known_data_chunks() {
             // Test with specific data that should produce predictable chunks
             let data = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
-            
+
             let chunker = Chunker::new(test_config()).unwrap();
             let chunks = chunker.chunk_bytes(data).unwrap();
 
@@ -492,13 +499,21 @@ mod tests {
             // All chunks except potentially the last should be >= min_size
             for (i, chunk) in chunks.iter().enumerate() {
                 if i < chunks.len() - 1 {
-                    assert!(chunk.data.len() >= test_config().min_size, 
-                           "Chunk {} has size {} which is below min_size {}", 
-                           i, chunk.data.len(), test_config().min_size);
+                    assert!(
+                        chunk.data.len() >= test_config().min_size,
+                        "Chunk {} has size {} which is below min_size {}",
+                        i,
+                        chunk.data.len(),
+                        test_config().min_size
+                    );
                 }
-                assert!(chunk.data.len() <= test_config().max_size,
-                       "Chunk {} has size {} which exceeds max_size {}",
-                       i, chunk.data.len(), test_config().max_size);
+                assert!(
+                    chunk.data.len() <= test_config().max_size,
+                    "Chunk {} has size {} which exceeds max_size {}",
+                    i,
+                    chunk.data.len(),
+                    test_config().max_size
+                );
             }
         }
 
@@ -531,14 +546,17 @@ mod tests {
                 }
             }
 
-            assert!(matching_chunks > 0, "Should have at least some matching chunks");
+            assert!(
+                matching_chunks > 0,
+                "Should have at least some matching chunks"
+            );
         }
 
         #[test]
         fn test_production_config_sizes() {
             // Test with production configuration (256KB min, 1MB avg, 4MB max)
             let chunker = Chunker::new(production_config()).unwrap();
-            
+
             // Create 10MB of test data with varying patterns
             let mut data = Vec::new();
             for i in 0..(10 * 1024 * 1024) {
@@ -553,14 +571,14 @@ mod tests {
             }
 
             let chunks = chunker.chunk_bytes(&data).unwrap();
-            
+
             // Verify basic properties
             assert!(!chunks.is_empty());
-            
+
             // Verify total size is preserved
             let total_size: usize = chunks.iter().map(|c| c.data.len()).sum();
             assert_eq!(total_size, data.len());
-            
+
             // Verify chunk size constraints
             for (i, chunk) in chunks.iter().enumerate() {
                 // All chunks except possibly the last must be >= min_size
@@ -568,32 +586,42 @@ mod tests {
                     assert!(
                         chunk.data.len() >= production_config().min_size,
                         "Chunk {} size {} is below min_size {}",
-                        i, chunk.data.len(), production_config().min_size
+                        i,
+                        chunk.data.len(),
+                        production_config().min_size
                     );
                 }
-                
+
                 // All chunks must be <= max_size
                 assert!(
                     chunk.data.len() <= production_config().max_size,
                     "Chunk {} size {} exceeds max_size {}",
-                    i, chunk.data.len(), production_config().max_size
+                    i,
+                    chunk.data.len(),
+                    production_config().max_size
                 );
             }
-            
+
             // Log statistics for verification
             let avg_size = total_size as f64 / chunks.len() as f64;
-            println!("Production config test: {} chunks, avg size: {:.0} bytes", chunks.len(), avg_size);
-            
+            println!(
+                "Production config test: {} chunks, avg size: {:.0} bytes",
+                chunks.len(),
+                avg_size
+            );
+
             // Average should be reasonably close to target (within 50-200% range is typical for CDC)
             assert!(
                 avg_size > (production_config().avg_size as f64 * 0.5),
                 "Average chunk size {:.0} is too small (expected around {})",
-                avg_size, production_config().avg_size
+                avg_size,
+                production_config().avg_size
             );
             assert!(
                 avg_size < (production_config().avg_size as f64 * 2.0),
                 "Average chunk size {:.0} is too large (expected around {})",
-                avg_size, production_config().avg_size
+                avg_size,
+                production_config().avg_size
             );
         }
 
@@ -601,21 +629,21 @@ mod tests {
         fn test_production_config_determinism() {
             // Ensure chunking is deterministic with production config
             let chunker = Chunker::new(production_config()).unwrap();
-            
+
             // Create 5MB of test data
             let data: Vec<u8> = (0..(5 * 1024 * 1024))
                 .map(|i| ((i * 31 + 17) % 256) as u8)
                 .collect();
-            
+
             // Chunk the same data multiple times
             let chunks1 = chunker.chunk_bytes(&data).unwrap();
             let chunks2 = chunker.chunk_bytes(&data).unwrap();
             let chunks3 = chunker.chunk_bytes(&data).unwrap();
-            
+
             // All runs should produce identical results
             assert_eq!(chunks1.len(), chunks2.len());
             assert_eq!(chunks1.len(), chunks3.len());
-            
+
             for i in 0..chunks1.len() {
                 assert_eq!(chunks1[i].data, chunks2[i].data);
                 assert_eq!(chunks1[i].data, chunks3[i].data);
@@ -630,25 +658,25 @@ mod tests {
         fn test_specific_golden_vector() {
             // Test with a specific known input to verify exact chunking behavior
             let chunker = Chunker::new(test_config()).unwrap();
-            
+
             // Use a repeating pattern that should produce predictable chunks
             let pattern = b"The quick brown fox jumps over the lazy dog. ";
             let mut data = Vec::new();
             for _ in 0..1000 {
                 data.extend_from_slice(pattern);
             }
-            
+
             let chunks = chunker.chunk_bytes(&data).unwrap();
-            
+
             // Verify deterministic properties
             assert!(!chunks.is_empty());
             let total_size: usize = chunks.iter().map(|c| c.data.len()).sum();
             assert_eq!(total_size, data.len());
-            
+
             // Store first chunk hash as a golden value
             // This ensures the implementation remains deterministic across changes
             let first_chunk_hash = chunks[0].hash.to_hex();
-            
+
             // Run again and verify we get the same first chunk
             let chunks2 = chunker.chunk_bytes(&data).unwrap();
             assert_eq!(chunks[0].hash.to_hex(), first_chunk_hash);
@@ -717,14 +745,14 @@ mod tests {
 
                 // Collect all unique hashes - should be one per chunk unless we have duplicates
                 let unique_hashes: HashSet<_> = chunks.iter().map(|c| c.hash).collect();
-                
+
                 // For randomly generated data, we expect most chunks to be unique
                 // Allow some duplicates but not too many
                 let duplicate_ratio = 1.0 - (unique_hashes.len() as f64 / chunks.len() as f64);
                 prop_assert!(duplicate_ratio < 0.5, "Too many duplicate chunks: ratio = {}", duplicate_ratio);
             }
 
-            #[test] 
+            #[test]
             fn test_average_chunk_size_convergence(seed in 0u64..1000) {
                 // Generate larger datasets to test average convergence
                 let mut data = Vec::new();
@@ -747,12 +775,12 @@ mod tests {
                     let total_size: usize = chunks.iter().map(|c| c.data.len()).sum();
                     let actual_avg = total_size as f64 / chunks.len() as f64;
                     let expected_avg = config.avg_size as f64;
-                    
+
                     // Allow for more variance since FastCDC can have significant deviation
                     // especially with certain data patterns
                     let ratio = actual_avg / expected_avg;
-                    prop_assert!(ratio >= 0.3 && ratio <= 3.0, 
-                               "Average chunk size {} too far from expected {}, ratio: {}", 
+                    prop_assert!(ratio >= 0.3 && ratio <= 3.0,
+                               "Average chunk size {} too far from expected {}, ratio: {}",
                                actual_avg, expected_avg, ratio);
                 }
             }

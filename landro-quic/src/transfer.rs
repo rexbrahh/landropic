@@ -4,12 +4,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 use crate::connection::Connection;
-use crate::protocol::{StreamProtocol, BatchTransferManager};
-use crate::resumable::{ResumableTransferManager, TransferStatus, TransferCheckpoint};
 use crate::errors::{QuicError, Result};
+use crate::protocol::{BatchTransferManager, StreamProtocol};
+use crate::resumable::{ResumableTransferManager, TransferCheckpoint, TransferStatus};
 
 /// Integrated transfer engine that combines QUIC operations with resumable transfers
 pub struct QuicTransferEngine {
@@ -57,8 +57,12 @@ impl QuicTransferEngine {
         total_size: u64,
         chunks_needed: Vec<Vec<u8>>,
     ) -> Result<()> {
-        info!("Starting resumable transfer: {} ({} bytes, {} chunks)", 
-            transfer_id, total_size, chunks_needed.len());
+        info!(
+            "Starting resumable transfer: {} ({} bytes, {} chunks)",
+            transfer_id,
+            total_size,
+            chunks_needed.len()
+        );
 
         // Create transfer session
         let session = TransferSession {
@@ -72,13 +76,15 @@ impl QuicTransferEngine {
         };
 
         // Register with resumable manager
-        self.resumable_manager.start_transfer(
-            transfer_id.clone(),
-            peer_id.clone(),
-            file_path,
-            total_size,
-            self.connection.clone(),
-        ).await?;
+        self.resumable_manager
+            .start_transfer(
+                transfer_id.clone(),
+                peer_id.clone(),
+                file_path,
+                total_size,
+                self.connection.clone(),
+            )
+            .await?;
 
         // Store session
         {
@@ -97,14 +103,21 @@ impl QuicTransferEngine {
         info!("Resuming transfer: {}", transfer_id);
 
         // Get transfer checkpoint
-        if let Some((status, progress, _bandwidth)) = self.resumable_manager.get_transfer_status(transfer_id).await {
+        if let Some((status, progress, _bandwidth)) = self
+            .resumable_manager
+            .get_transfer_status(transfer_id)
+            .await
+        {
             match status {
                 TransferStatus::Paused | TransferStatus::Failed => {
                     // Resume with resumable manager
-                    self.resumable_manager.resume_transfer(transfer_id, self.connection.clone()).await?;
-                    
+                    self.resumable_manager
+                        .resume_transfer(transfer_id, self.connection.clone())
+                        .await?;
+
                     // Continue chunk transfer
-                    self.transfer_chunks_resumable(transfer_id.to_string()).await?;
+                    self.transfer_chunks_resumable(transfer_id.to_string())
+                        .await?;
                 }
                 TransferStatus::Active => {
                     warn!("Transfer {} is already active", transfer_id);
@@ -113,11 +126,17 @@ impl QuicTransferEngine {
                     info!("Transfer {} is already completed", transfer_id);
                 }
                 TransferStatus::Cancelled => {
-                    return Err(QuicError::Protocol(format!("Cannot resume cancelled transfer: {}", transfer_id)));
+                    return Err(QuicError::Protocol(format!(
+                        "Cannot resume cancelled transfer: {}",
+                        transfer_id
+                    )));
                 }
             }
         } else {
-            return Err(QuicError::Protocol(format!("Transfer not found: {}", transfer_id)));
+            return Err(QuicError::Protocol(format!(
+                "Transfer not found: {}",
+                transfer_id
+            )));
         }
 
         Ok(())
@@ -152,14 +171,20 @@ impl QuicTransferEngine {
         }
 
         // Mark as failed in resumable manager (which handles cleanup)
-        self.resumable_manager.fail_transfer(transfer_id, "Transfer cancelled by user").await?;
+        self.resumable_manager
+            .fail_transfer(transfer_id, "Transfer cancelled by user")
+            .await?;
 
         Ok(())
     }
 
     /// Get transfer progress information
     pub async fn get_transfer_progress(&self, transfer_id: &str) -> Option<TransferProgress> {
-        if let Some((status, progress, bandwidth)) = self.resumable_manager.get_transfer_status(transfer_id).await {
+        if let Some((status, progress, bandwidth)) = self
+            .resumable_manager
+            .get_transfer_status(transfer_id)
+            .await
+        {
             let active_transfers = self.active_transfers.read().await;
             if let Some(session) = active_transfers.get(transfer_id) {
                 return Some(TransferProgress {
@@ -195,11 +220,14 @@ impl QuicTransferEngine {
     async fn transfer_chunks_resumable(&mut self, transfer_id: String) -> Result<()> {
         let chunks_to_request = {
             let active_transfers = self.active_transfers.read().await;
-            let session = active_transfers.get(&transfer_id)
-                .ok_or_else(|| QuicError::Protocol(format!("Transfer session not found: {}", transfer_id)))?;
+            let session = active_transfers.get(&transfer_id).ok_or_else(|| {
+                QuicError::Protocol(format!("Transfer session not found: {}", transfer_id))
+            })?;
 
             // Find chunks we still need (haven't received yet)
-            session.chunks_needed.iter()
+            session
+                .chunks_needed
+                .iter()
                 .filter(|hash| !session.chunks_received.contains_key(*hash))
                 .cloned()
                 .collect::<Vec<_>>()
@@ -211,10 +239,18 @@ impl QuicTransferEngine {
             return Ok(());
         }
 
-        info!("Requesting {} chunks for transfer: {}", chunks_to_request.len(), transfer_id);
+        info!(
+            "Requesting {} chunks for transfer: {}",
+            chunks_to_request.len(),
+            transfer_id
+        );
 
         // Use batch manager to request chunks efficiently
-        match self.batch_manager.transfer_chunks(chunks_to_request.clone()).await {
+        match self
+            .batch_manager
+            .transfer_chunks(chunks_to_request.clone())
+            .await
+        {
             Ok(received_chunks) => {
                 // Update session with received chunks
                 {
@@ -229,23 +265,31 @@ impl QuicTransferEngine {
 
                 // Update progress in resumable manager
                 let progress = self.calculate_progress(&transfer_id).await;
-                self.resumable_manager.update_progress(
-                    &transfer_id, 
-                    progress.bytes_transferred, 
-                    progress.chunks_received as u64
-                ).await?;
+                self.resumable_manager
+                    .update_progress(
+                        &transfer_id,
+                        progress.bytes_transferred,
+                        progress.chunks_received as u64,
+                    )
+                    .await?;
 
                 // Check if transfer is complete
                 if progress.chunks_received == progress.chunks_total {
                     self.complete_transfer(&transfer_id).await?;
                 } else {
-                    debug!("Transfer progress: {:.1}% ({}/{})", 
-                        progress.progress * 100.0, progress.chunks_received, progress.chunks_total);
+                    debug!(
+                        "Transfer progress: {:.1}% ({}/{})",
+                        progress.progress * 100.0,
+                        progress.chunks_received,
+                        progress.chunks_total
+                    );
                 }
             }
             Err(e) => {
                 error!("Chunk transfer failed for {}: {}", transfer_id, e);
-                self.resumable_manager.fail_transfer(&transfer_id, &format!("Chunk transfer failed: {}", e)).await?;
+                self.resumable_manager
+                    .fail_transfer(&transfer_id, &format!("Chunk transfer failed: {}", e))
+                    .await?;
                 return Err(e);
             }
         }
@@ -266,7 +310,9 @@ impl QuicTransferEngine {
         }
 
         // Mark as completed in resumable manager
-        self.resumable_manager.complete_transfer(transfer_id).await?;
+        self.resumable_manager
+            .complete_transfer(transfer_id)
+            .await?;
 
         Ok(())
     }
@@ -274,16 +320,16 @@ impl QuicTransferEngine {
     /// Calculate current transfer progress
     async fn calculate_progress(&self, transfer_id: &str) -> TransferProgress {
         let active_transfers = self.active_transfers.read().await;
-        
+
         if let Some(session) = active_transfers.get(transfer_id) {
             let chunks_received = session.chunks_received.len();
             let chunks_total = session.chunks_needed.len();
-            let progress = if chunks_total > 0 { 
-                chunks_received as f32 / chunks_total as f32 
-            } else { 
-                0.0 
+            let progress = if chunks_total > 0 {
+                chunks_received as f32 / chunks_total as f32
+            } else {
+                0.0
             };
-            
+
             TransferProgress {
                 transfer_id: transfer_id.to_string(),
                 status: session.status.clone(),
@@ -346,7 +392,10 @@ impl TransferProgress {
         } else if self.bandwidth_bytes_per_sec < 1024.0 * 1024.0 {
             format!("{:.1} KB/s", self.bandwidth_bytes_per_sec / 1024.0)
         } else {
-            format!("{:.1} MB/s", self.bandwidth_bytes_per_sec / (1024.0 * 1024.0))
+            format!(
+                "{:.1} MB/s",
+                self.bandwidth_bytes_per_sec / (1024.0 * 1024.0)
+            )
         }
     }
 
@@ -364,7 +413,11 @@ impl TransferProgress {
             }
         }
 
-        format!("{} / {}", format_bytes(self.bytes_transferred), format_bytes(self.bytes_total))
+        format!(
+            "{} / {}",
+            format_bytes(self.bytes_transferred),
+            format_bytes(self.bytes_total)
+        )
     }
 }
 

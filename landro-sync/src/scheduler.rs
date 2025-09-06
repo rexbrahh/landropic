@@ -45,7 +45,7 @@ impl TransferScheduler {
         if self.active_transfers >= self.max_concurrent {
             return None;
         }
-        
+
         self.queue.pop().map(|(request, _priority)| {
             self.active_transfers += 1;
             request

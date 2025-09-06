@@ -1,13 +1,13 @@
 //! Crash safety and recovery mechanisms for sync operations
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 use crate::errors::Result;
 use crate::state::AsyncSyncDatabase;
@@ -84,18 +84,15 @@ pub struct RecoveryStats {
 
 impl RecoveryManager {
     /// Create a new recovery manager
-    pub async fn new(
-        database: AsyncSyncDatabase,
-        storage_path: impl AsRef<Path>,
-    ) -> Result<Self> {
+    pub async fn new(database: AsyncSyncDatabase, storage_path: impl AsRef<Path>) -> Result<Self> {
         let storage_path = storage_path.as_ref();
         let recovery_log_path = storage_path.join("recovery.log");
-        
+
         // Ensure recovery directory exists
         if let Some(parent) = recovery_log_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        
+
         Ok(Self {
             database,
             recovery_log_path,
@@ -107,7 +104,7 @@ impl RecoveryManager {
     pub async fn recover_on_startup(&self) -> Result<RecoveryStats> {
         info!("Starting crash recovery process");
         let start_time = std::time::Instant::now();
-        
+
         let mut stats = RecoveryStats {
             operations_recovered: 0,
             operations_completed: 0,
@@ -115,33 +112,37 @@ impl RecoveryManager {
             operations_abandoned: 0,
             total_recovery_time: std::time::Duration::default(),
         };
-        
+
         // Load recovery log
         let operations = self.load_recovery_log().await?;
-        
+
         if operations.is_empty() {
             info!("No operations to recover");
             return Ok(stats);
         }
-        
+
         info!("Found {} operations to recover", operations.len());
-        
+
         // Process each operation
         for mut operation in operations {
             stats.operations_recovered += 1;
-            
+
             // Check if operation is too old to recover
             let age = Utc::now().signed_duration_since(operation.started_at);
             if age.num_hours() > 24 {
-                warn!("Abandoning old operation: {} (age: {} hours)", operation.id, age.num_hours());
+                warn!(
+                    "Abandoning old operation: {} (age: {} hours)",
+                    operation.id,
+                    age.num_hours()
+                );
                 stats.operations_abandoned += 1;
                 continue;
             }
-            
+
             // Mark as recovering
             operation.status = OperationStatus::Recovering;
             self.save_operation(&operation).await?;
-            
+
             // Attempt recovery based on operation type
             match self.recover_operation(&mut operation).await {
                 Ok(true) => {
@@ -157,7 +158,7 @@ impl RecoveryManager {
                     error!("Failed to recover operation {}: {}", operation.id, e);
                     operation.retry_count += 1;
                     operation.error_message = Some(e.to_string());
-                    
+
                     if operation.retry_count >= 3 {
                         operation.status = OperationStatus::Failed;
                         stats.operations_failed += 1;
@@ -166,12 +167,12 @@ impl RecoveryManager {
                     }
                 }
             }
-            
+
             self.save_operation(&operation).await?;
         }
-        
+
         stats.total_recovery_time = start_time.elapsed();
-        
+
         info!(
             "Recovery completed: {} recovered, {} completed, {} failed, {} abandoned in {:?}",
             stats.operations_recovered,
@@ -180,59 +181,66 @@ impl RecoveryManager {
             stats.operations_abandoned,
             stats.total_recovery_time
         );
-        
+
         Ok(stats)
     }
 
     /// Start tracking a new operation
     pub async fn start_operation(&self, operation: Operation) -> Result<()> {
         debug!("Starting operation: {}", operation.id);
-        
+
         // Add to active operations
         {
             let mut active = self.active_operations.write().await;
             active.insert(operation.id.clone(), operation.clone());
         }
-        
+
         // Write to recovery log
         self.save_operation(&operation).await?;
-        
+
         Ok(())
     }
 
     /// Update operation progress (checkpoint)
-    pub async fn checkpoint_operation(&self, operation_id: &str, progress_update: impl FnOnce(&mut Operation)) -> Result<()> {
+    pub async fn checkpoint_operation(
+        &self,
+        operation_id: &str,
+        progress_update: impl FnOnce(&mut Operation),
+    ) -> Result<()> {
         let mut active = self.active_operations.write().await;
-        
+
         if let Some(operation) = active.get_mut(operation_id) {
             // Apply progress update
             progress_update(operation);
             operation.last_checkpoint = Utc::now();
-            
+
             // Save checkpoint to log
             self.save_operation(operation).await?;
-            
+
             debug!("Checkpointed operation: {}", operation_id);
         } else {
-            warn!("Attempted to checkpoint unknown operation: {}", operation_id);
+            warn!(
+                "Attempted to checkpoint unknown operation: {}",
+                operation_id
+            );
         }
-        
+
         Ok(())
     }
 
     /// Complete an operation successfully
     pub async fn complete_operation(&self, operation_id: &str) -> Result<()> {
         debug!("Completing operation: {}", operation_id);
-        
+
         let mut active = self.active_operations.write().await;
-        
+
         if let Some(mut operation) = active.remove(operation_id) {
             operation.status = OperationStatus::Completed;
             operation.last_checkpoint = Utc::now();
-            
+
             // Save final state
             self.save_operation(&operation).await?;
-            
+
             // Remove from recovery log immediately
             // In a production system, you might want to keep completed operations
             // for a while for debugging purposes, but for now we'll clean up immediately
@@ -240,31 +248,31 @@ impl RecoveryManager {
                 warn!("Failed to remove completed operation from log: {}", e);
             }
         }
-        
+
         Ok(())
     }
 
     /// Mark operation as failed
     pub async fn fail_operation(&self, operation_id: &str, error: &str) -> Result<()> {
         debug!("Failing operation: {} - {}", operation_id, error);
-        
+
         let mut active = self.active_operations.write().await;
-        
+
         if let Some(mut operation) = active.get_mut(operation_id) {
             operation.status = OperationStatus::Failed;
             operation.error_message = Some(error.to_string());
             operation.retry_count += 1;
             operation.last_checkpoint = Utc::now();
-            
+
             // Save failed state
             self.save_operation(&operation).await?;
-            
+
             // Remove from active if max retries reached
             if operation.retry_count >= 3 {
                 active.remove(operation_id);
             }
         }
-        
+
         Ok(())
     }
 
@@ -276,29 +284,43 @@ impl RecoveryManager {
     /// Recover a specific operation based on its type
     async fn recover_operation(&self, operation: &mut Operation) -> Result<bool> {
         match &operation.operation_type {
-            OperationType::Transfer { peer_id, file_path, chunk_hash, total_size, bytes_transferred } => {
+            OperationType::Transfer {
+                peer_id,
+                file_path,
+                chunk_hash,
+                total_size,
+                bytes_transferred,
+            } => {
                 self.recover_transfer_operation(
                     peer_id,
                     file_path,
                     chunk_hash,
                     *total_size,
                     *bytes_transferred,
-                ).await
+                )
+                .await
             }
-            OperationType::ManifestSync { peer_id, folder_id, local_manifest_hash, remote_manifest_hash } => {
+            OperationType::ManifestSync {
+                peer_id,
+                folder_id,
+                local_manifest_hash,
+                remote_manifest_hash,
+            } => {
                 self.recover_manifest_sync_operation(
                     peer_id,
                     folder_id,
                     local_manifest_hash,
                     remote_manifest_hash,
-                ).await
+                )
+                .await
             }
-            OperationType::IndexUpdate { folder_path, files_processed, total_files } => {
-                self.recover_index_update_operation(
-                    folder_path,
-                    *files_processed,
-                    *total_files,
-                ).await
+            OperationType::IndexUpdate {
+                folder_path,
+                files_processed,
+                total_files,
+            } => {
+                self.recover_index_update_operation(folder_path, *files_processed, *total_files)
+                    .await
             }
         }
     }
@@ -316,22 +338,21 @@ impl RecoveryManager {
             "Recovering transfer: peer={}, file={}, chunk={}, progress={}/{}",
             peer_id, file_path, chunk_hash, bytes_transferred, total_size
         );
-        
+
         // Check if transfer was already completed
         if bytes_transferred >= total_size {
             info!("Transfer already completed during recovery: {}", chunk_hash);
             return Ok(true);
         }
-        
+
         // Add back to pending transfers in database
-        self.database.add_pending_transfer(
-            peer_id,
-            "default", // TODO: Get actual folder ID
-            file_path,
-            chunk_hash,
-            0, // High priority for resumed transfers
-        ).await?;
-        
+        self.database
+            .add_pending_transfer(
+                peer_id, "default", // TODO: Get actual folder ID
+                file_path, chunk_hash, 0, // High priority for resumed transfers
+            )
+            .await?;
+
         // Transfer will be resumed by the scheduler
         Ok(false)
     }
@@ -348,13 +369,13 @@ impl RecoveryManager {
             "Recovering manifest sync: peer={}, folder={}, local={}, remote={}",
             peer_id, folder_id, local_manifest_hash, remote_manifest_hash
         );
-        
+
         // Check if sync is still needed
         if local_manifest_hash == remote_manifest_hash {
             info!("Manifest sync no longer needed: {}", folder_id);
             return Ok(true);
         }
-        
+
         // Manifest sync will be retrigger by the orchestrator
         info!("Manifest sync will be retriggered: {}", folder_id);
         Ok(false)
@@ -371,13 +392,13 @@ impl RecoveryManager {
             "Recovering index update: folder={}, progress={}/{}",
             folder_path, files_processed, total_files
         );
-        
+
         // Check if indexing was completed
         if files_processed >= total_files {
             info!("Index update already completed: {}", folder_path);
             return Ok(true);
         }
-        
+
         // Index update will be retriggered by file watcher
         info!("Index update will be retriggered: {}", folder_path);
         Ok(false)
@@ -386,21 +407,22 @@ impl RecoveryManager {
     /// Save operation to recovery log
     async fn save_operation(&self, operation: &Operation) -> Result<()> {
         let log_entry = format!("{}\n", serde_json::to_string(operation)?);
-        
+
         // Append to recovery log (atomic write)
         let temp_path = format!("{}.tmp", self.recovery_log_path.display());
-        
+
         // Read existing log
         let mut existing_content = String::new();
         if self.recovery_log_path.exists() {
-            existing_content = fs::read_to_string(&self.recovery_log_path).await
+            existing_content = fs::read_to_string(&self.recovery_log_path)
+                .await
                 .unwrap_or_default();
         }
-        
+
         // Update or append operation
         let mut lines: Vec<String> = existing_content.lines().map(|s| s.to_string()).collect();
         let mut found = false;
-        
+
         for line in &mut lines {
             if let Ok(existing_op) = serde_json::from_str::<Operation>(line) {
                 if existing_op.id == operation.id {
@@ -410,17 +432,17 @@ impl RecoveryManager {
                 }
             }
         }
-        
+
         if !found {
             lines.push(serde_json::to_string(operation)?);
         }
-        
+
         let new_content = lines.join("\n") + "\n";
-        
+
         // Atomic write
         fs::write(&temp_path, new_content).await?;
         fs::rename(&temp_path, &self.recovery_log_path).await?;
-        
+
         Ok(())
     }
 
@@ -429,19 +451,22 @@ impl RecoveryManager {
         if !self.recovery_log_path.exists() {
             return Ok(Vec::new());
         }
-        
+
         let content = fs::read_to_string(&self.recovery_log_path).await?;
         let mut operations = Vec::new();
-        
+
         for line in content.lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            
+
             match serde_json::from_str::<Operation>(line) {
                 Ok(operation) => {
                     // Only recover incomplete operations
-                    if matches!(operation.status, OperationStatus::InProgress | OperationStatus::Interrupted) {
+                    if matches!(
+                        operation.status,
+                        OperationStatus::InProgress | OperationStatus::Interrupted
+                    ) {
                         operations.push(operation);
                     }
                 }
@@ -450,7 +475,7 @@ impl RecoveryManager {
                 }
             }
         }
-        
+
         Ok(operations)
     }
 
@@ -459,15 +484,15 @@ impl RecoveryManager {
         if !self.recovery_log_path.exists() {
             return Ok(());
         }
-        
+
         let content = fs::read_to_string(&self.recovery_log_path).await?;
         let mut lines = Vec::new();
-        
+
         for line in content.lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            
+
             match serde_json::from_str::<Operation>(line) {
                 Ok(operation) => {
                     if operation.id != operation_id {
@@ -479,10 +504,10 @@ impl RecoveryManager {
                 }
             }
         }
-        
+
         let new_content = lines.join("\n") + "\n";
         fs::write(&self.recovery_log_path, new_content).await?;
-        
+
         Ok(())
     }
 }
@@ -518,9 +543,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
         let db = AsyncSyncDatabase::open_in_memory().await.unwrap();
-        
+
         let recovery_manager = RecoveryManager::new(db, temp_dir.path()).await.unwrap();
-        
+
         // Create test operation
         let operation = Operation {
             id: generate_operation_id(),
@@ -537,17 +562,23 @@ mod tests {
             retry_count: 0,
             error_message: None,
         };
-        
+
         // Start operation
-        recovery_manager.start_operation(operation.clone()).await.unwrap();
-        
+        recovery_manager
+            .start_operation(operation.clone())
+            .await
+            .unwrap();
+
         // Check it's active
         let active = recovery_manager.get_active_operations().await;
         assert!(active.contains_key(&operation.id));
-        
+
         // Complete operation
-        recovery_manager.complete_operation(&operation.id).await.unwrap();
-        
+        recovery_manager
+            .complete_operation(&operation.id)
+            .await
+            .unwrap();
+
         // Check it's no longer active
         let active = recovery_manager.get_active_operations().await;
         assert!(!active.contains_key(&operation.id));

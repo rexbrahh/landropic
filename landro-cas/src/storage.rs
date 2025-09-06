@@ -151,7 +151,10 @@ impl ContentStore {
     /// # Returns
     ///
     /// A new ContentStore instance
-    pub async fn new_with_config(root_path: impl AsRef<Path>, config: ContentStoreConfig) -> Result<Self> {
+    pub async fn new_with_config(
+        root_path: impl AsRef<Path>,
+        config: ContentStoreConfig,
+    ) -> Result<Self> {
         let root_path = root_path.as_ref().to_path_buf();
 
         // Ensure root directory exists
@@ -161,15 +164,21 @@ impl ContentStore {
         let objects_dir = root_path.join("objects");
         fs::create_dir_all(&objects_dir).await?;
 
-        debug!("Content store initialized at {:?} with config {:?}", root_path, config);
+        debug!(
+            "Content store initialized at {:?} with config {:?}",
+            root_path, config
+        );
 
         // Initialize packfile manager if enabled
         let packfile_manager = if config.enable_packfiles {
-            Some(PackfileManager::new_with_config(&root_path, config.packfile_config.clone()).await?)
+            Some(
+                PackfileManager::new_with_config(&root_path, config.packfile_config.clone())
+                    .await?,
+            )
         } else {
             None
         };
-        
+
         let store = Self {
             root_path,
             config: config.clone(),
@@ -181,8 +190,10 @@ impl ContentStore {
         if config.enable_recovery {
             let stats = store.recover().await?;
             if stats.recovered > 0 || stats.cleaned > 0 {
-                debug!("Recovery completed: recovered {}, cleaned {}, errors: {:?}", 
-                      stats.recovered, stats.cleaned, stats.errors);
+                debug!(
+                    "Recovery completed: recovered {}, cleaned {}, errors: {:?}",
+                    stats.recovered, stats.cleaned, stats.errors
+                );
             }
         }
 
@@ -205,7 +216,7 @@ impl ContentStore {
     /// Write an object to the content store using Bytes for zero-copy optimization.
     ///
     /// The object is written atomically using a temporary file and rename for large objects,
-    /// or stored in packfiles for small objects. If an object with the same hash already 
+    /// or stored in packfiles for small objects. If an object with the same hash already
     /// exists, this is a no-op. Fsync behavior is controlled by the store's configuration.
     ///
     /// # Arguments
@@ -218,11 +229,11 @@ impl ContentStore {
     pub async fn write_bytes(&self, data: Bytes) -> Result<ObjectRef> {
         self.write(&data[..]).await
     }
-    
+
     /// Write an object to the content store.
     ///
     /// The object is written atomically using a temporary file and rename for large objects,
-    /// or stored in packfiles for small objects. If an object with the same hash already 
+    /// or stored in packfiles for small objects. If an object with the same hash already
     /// exists, this is a no-op. Fsync behavior is controlled by the store's configuration.
     ///
     /// # Arguments
@@ -236,7 +247,7 @@ impl ContentStore {
         // Validate object size
         validation::validate_object_size(data.len())
             .map_err(|e| CasError::InvalidOperation(format!("Object validation failed: {}", e)))?;
-        
+
         // Calculate hash
         let mut hasher = Hasher::new();
         hasher.update(data);
@@ -263,23 +274,27 @@ impl ContentStore {
         // Store as individual file
         self.write_individual(data, hash).await
     }
-    
+
     /// Write data using packfile storage
     async fn write_with_packing(&self, data: &[u8], hash: ContentHash) -> Result<ObjectRef> {
         if let Some(_manager) = &self.packfile_manager {
             // For thread safety, we'd normally need a mutex here, but for now assume single-threaded access
             // In a production implementation, you'd want Arc<Mutex<PackfileManager>> or similar
             // manager.add_chunk(hash, data).await?;
-            debug!("Would store object {} ({} bytes) in packfile", hash, data.len());
-            
+            debug!(
+                "Would store object {} ({} bytes) in packfile",
+                hash,
+                data.len()
+            );
+
             // For now, fall back to individual storage until we implement proper async mutex handling
             return self.write_individual(data, hash).await;
         }
-        
+
         // Fallback to individual storage
         self.write_individual(data, hash).await
     }
-    
+
     /// Write data as individual file (the original write logic)
     async fn write_individual(&self, data: &[u8], hash: ContentHash) -> Result<ObjectRef> {
         let object_path = self.object_path(&hash);
@@ -291,7 +306,11 @@ impl ContentStore {
 
         self.write_atomic(&object_path, data, &hash).await?;
 
-        debug!("Wrote object {} ({} bytes) as individual file", hash, data.len());
+        debug!(
+            "Wrote object {} ({} bytes) as individual file",
+            hash,
+            data.len()
+        );
 
         Ok(ObjectRef {
             hash,
@@ -321,7 +340,7 @@ impl ContentStore {
         // Validate hash format
         validation::validate_content_hash(&hash.to_string())
             .map_err(|e| CasError::InvalidOperation(format!("Hash validation failed: {}", e)))?;
-        
+
         // Try reading from packfiles first (they're likely to have small, frequently accessed objects)
         if self.config.enable_packfiles {
             if let Some(ref manager) = self.packfile_manager {
@@ -331,11 +350,11 @@ impl ContentStore {
                 }
             }
         }
-        
+
         // Fall back to individual file storage
         self.read_individual(hash).await
     }
-    
+
     /// Read data from individual file storage (the original read logic)
     async fn read_individual(&self, hash: &ContentHash) -> Result<Bytes> {
         let object_path = self.object_path(hash);
@@ -373,7 +392,11 @@ impl ContentStore {
             });
         }
 
-        trace!("Read object {} ({} bytes) from individual file", hash, data.len());
+        trace!(
+            "Read object {} ({} bytes) from individual file",
+            hash,
+            data.len()
+        );
 
         Ok(Bytes::from(data))
     }
@@ -392,7 +415,7 @@ impl ContentStore {
         if self.object_path(hash).exists() {
             return true;
         }
-        
+
         // Check packfiles if enabled
         if self.config.enable_packfiles {
             if let Some(ref manager) = self.packfile_manager {
@@ -401,7 +424,7 @@ impl ContentStore {
                 }
             }
         }
-        
+
         false
     }
 
@@ -458,14 +481,20 @@ impl ContentStore {
     /// * `final_path` - The final destination path
     /// * `data` - The data to write
     /// * `expected_hash` - Expected hash for verification
-    async fn write_atomic(&self, final_path: &Path, data: &[u8], _expected_hash: &ContentHash) -> Result<()> {
+    async fn write_atomic(
+        &self,
+        final_path: &Path,
+        data: &[u8],
+        _expected_hash: &ContentHash,
+    ) -> Result<()> {
         let temp_dir = final_path
             .parent()
             .ok_or_else(|| CasError::StoragePath("Invalid object path".to_string()))?;
 
         // Create temp file with .tmp extension in the same directory
         let temp_path = {
-            let mut temp_name = final_path.file_name()
+            let mut temp_name = final_path
+                .file_name()
                 .ok_or_else(|| CasError::StoragePath("Invalid object filename".to_string()))?
                 .to_os_string();
             temp_name.push(".tmp");
@@ -474,32 +503,34 @@ impl ContentStore {
 
         // Write data to temp file
         {
-            let mut file = File::create(&temp_path).await
-                .map_err(|e| CasError::AtomicWriteFailed(format!("Failed to create temp file: {}", e)))?;
-            
-            file.write_all(data).await
+            let mut file = File::create(&temp_path).await.map_err(|e| {
+                CasError::AtomicWriteFailed(format!("Failed to create temp file: {}", e))
+            })?;
+
+            file.write_all(data)
+                .await
                 .map_err(|e| CasError::AtomicWriteFailed(format!("Failed to write data: {}", e)))?;
 
             // Fsync temp file based on policy
             if self.should_fsync_file() {
-                file.sync_all().await
-                    .map_err(|e| CasError::AtomicWriteFailed(format!("Failed to sync temp file: {}", e)))?;
+                file.sync_all().await.map_err(|e| {
+                    CasError::AtomicWriteFailed(format!("Failed to sync temp file: {}", e))
+                })?;
             }
         }
 
         // Atomic rename to final location
-        fs::rename(&temp_path, final_path)
-            .await
-            .map_err(|e| {
-                // Clean up temp file on rename failure
-                let _ = std::fs::remove_file(&temp_path);
-                CasError::AtomicWriteFailed(format!("Failed to rename temp file: {}", e))
-            })?;
+        fs::rename(&temp_path, final_path).await.map_err(|e| {
+            // Clean up temp file on rename failure
+            let _ = std::fs::remove_file(&temp_path);
+            CasError::AtomicWriteFailed(format!("Failed to rename temp file: {}", e))
+        })?;
 
         // Fsync parent directory to ensure rename is durable
         if self.should_fsync_directory() {
-            self.fsync_directory(temp_dir).await
-                .map_err(|e| CasError::AtomicWriteFailed(format!("Failed to sync directory: {}", e)))?;
+            self.fsync_directory(temp_dir).await.map_err(|e| {
+                CasError::AtomicWriteFailed(format!("Failed to sync directory: {}", e))
+            })?;
         }
 
         // Update pending sync counter for batch fsync
@@ -574,7 +605,9 @@ impl ContentStore {
             let mut dir_entries = match fs::read_dir(&current_dir).await {
                 Ok(entries) => entries,
                 Err(e) => {
-                    stats.errors.push(format!("Failed to read directory {:?}: {}", current_dir, e));
+                    stats
+                        .errors
+                        .push(format!("Failed to read directory {:?}: {}", current_dir, e));
                     continue;
                 }
             };
@@ -584,26 +617,39 @@ impl ContentStore {
                     Ok(Some(entry)) => entry,
                     Ok(None) => break,
                     Err(e) => {
-                        stats.errors.push(format!("Failed to read directory entry: {}", e));
+                        stats
+                            .errors
+                            .push(format!("Failed to read directory entry: {}", e));
                         continue;
                     }
                 };
                 let path = entry.path();
-                
-                if entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false) {
+
+                if entry
+                    .file_type()
+                    .await
+                    .map(|ft| ft.is_dir())
+                    .unwrap_or(false)
+                {
                     stack.push(path);
                 } else if path.extension().and_then(|s| s.to_str()) == Some("tmp") {
                     match self.recover_temp_file(&path, &mut stats).await {
-                        Ok(_) => {},
-                        Err(e) => stats.errors.push(format!("Recovery error for {:?}: {}", path, e)),
+                        Ok(_) => {}
+                        Err(e) => stats
+                            .errors
+                            .push(format!("Recovery error for {:?}: {}", path, e)),
                     }
                 }
             }
         }
 
         if stats.recovered > 0 || stats.cleaned > 0 || !stats.errors.is_empty() {
-            debug!("Recovery completed: recovered={}, cleaned={}, errors={}",
-                  stats.recovered, stats.cleaned, stats.errors.len());
+            debug!(
+                "Recovery completed: recovered={}, cleaned={}, errors={}",
+                stats.recovered,
+                stats.cleaned,
+                stats.errors.len()
+            );
         }
 
         Ok(stats)
@@ -613,14 +659,17 @@ impl ContentStore {
     async fn recover_temp_file(&self, temp_path: &Path, stats: &mut RecoveryStats) -> Result<()> {
         // Determine what the final path should be
         let final_path = {
-            let temp_name = temp_path.file_name()
+            let temp_name = temp_path
+                .file_name()
                 .ok_or_else(|| CasError::StoragePath("Invalid temp filename".to_string()))?;
             let temp_name_str = temp_name.to_string_lossy();
-            
+
             if !temp_name_str.ends_with(".tmp") {
-                return Err(CasError::StoragePath("Temp file doesn't end with .tmp".to_string()));
+                return Err(CasError::StoragePath(
+                    "Temp file doesn't end with .tmp".to_string(),
+                ));
             }
-            
+
             let final_name = &temp_name_str[..temp_name_str.len() - 4]; // Remove ".tmp"
             temp_path.parent().unwrap().join(final_name)
         };
@@ -631,7 +680,7 @@ impl ContentStore {
                 Ok(_) => {
                     stats.cleaned += 1;
                     trace!("Cleaned up redundant temp file: {:?}", temp_path);
-                },
+                }
                 Err(e) => warn!("Failed to clean up temp file {:?}: {}", temp_path, e),
             }
             return Ok(());
@@ -660,14 +709,14 @@ impl ContentStore {
                 Ok(_) => {
                     stats.recovered += 1;
                     debug!("Recovered temp file: {:?} -> {:?}", temp_path, final_path);
-                    
+
                     // Fsync directory if policy requires it
                     if self.should_fsync_directory() {
                         if let Some(parent) = final_path.parent() {
                             let _ = self.fsync_directory(parent).await;
                         }
                     }
-                },
+                }
                 Err(e) => {
                     warn!("Failed to complete recovery of {:?}: {}", temp_path, e);
                     let _ = fs::remove_file(temp_path).await;
@@ -698,7 +747,7 @@ impl ContentStore {
 
         let mut object_count = 0u64;
         let mut total_size = 0u64;
-        
+
         // Count individual files
         if objects_dir.exists() {
             let mut dir_entries = fs::read_dir(&objects_dir).await?;
@@ -727,7 +776,7 @@ impl ContentStore {
                 }
             }
         }
-        
+
         // Add packfile statistics
         if self.config.enable_packfiles {
             if let Some(ref manager) = self.packfile_manager {
@@ -839,7 +888,7 @@ impl ContentStore {
             Err(e) => Err(e),
         }
     }
-    
+
     /// Force flush any pending packfile operations
     pub async fn flush_packfiles(&mut self) -> Result<()> {
         if let Some(ref mut manager) = self.packfile_manager {
@@ -847,7 +896,7 @@ impl ContentStore {
         }
         Ok(())
     }
-    
+
     /// Finalize all packfile operations (useful for shutdown)
     pub async fn finalize_packfiles(&mut self) -> Result<()> {
         if let Some(ref mut manager) = self.packfile_manager {
@@ -855,14 +904,17 @@ impl ContentStore {
         }
         Ok(())
     }
-    
+
     /// Get packfile statistics if packfiles are enabled
     pub fn packfile_stats(&self) -> Option<crate::packfile::PackfileStats> {
         self.packfile_manager.as_ref().map(|m| m.stats())
     }
-    
+
     /// Perform garbage collection and repacking
-    pub async fn gc_packfiles(&mut self, keep_chunks: &std::collections::HashSet<ContentHash>) -> Result<GcStats> {
+    pub async fn gc_packfiles(
+        &mut self,
+        keep_chunks: &std::collections::HashSet<ContentHash>,
+    ) -> Result<GcStats> {
         if let Some(ref mut _manager) = self.packfile_manager {
             // TODO: Implement actual GC logic
             // This would:
@@ -870,9 +922,12 @@ impl ContentStore {
             // 2. Create new packfiles with only referenced chunks
             // 3. Remove old packfiles atomically
             // 4. Update internal data structures
-            
-            debug!("GC requested for {} keep_chunks, but not yet implemented", keep_chunks.len());
-            
+
+            debug!(
+                "GC requested for {} keep_chunks, but not yet implemented",
+                keep_chunks.len()
+            );
+
             Ok(GcStats {
                 objects_examined: 0,
                 objects_kept: 0,
@@ -892,7 +947,7 @@ impl ContentStore {
             })
         }
     }
-    
+
     /// Repack underutilized packfiles
     pub async fn repack(&mut self) -> Result<PackingStats> {
         if let Some(ref mut _manager) = self.packfile_manager {
@@ -902,9 +957,9 @@ impl ContentStore {
             // 2. Extract still-valid chunks
             // 3. Create new optimized packfiles
             // 4. Remove old packfiles atomically
-            
+
             debug!("Repack requested but not yet implemented");
-            
+
             Ok(PackingStats {
                 objects_repacked: 0,
                 old_packfiles_removed: 0,
@@ -1134,7 +1189,9 @@ mod tests {
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
         };
-        let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
+        let store = ContentStore::new_with_config(dir.path(), config)
+            .await
+            .unwrap();
 
         let data = b"Test data with always fsync";
         let obj_ref = store.write(data).await.unwrap();
@@ -1154,7 +1211,9 @@ mod tests {
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
         };
-        let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
+        let store = ContentStore::new_with_config(dir.path(), config)
+            .await
+            .unwrap();
 
         let data = b"Test data with never fsync";
         let obj_ref = store.write(data).await.unwrap();
@@ -1174,7 +1233,9 @@ mod tests {
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
         };
-        let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
+        let store = ContentStore::new_with_config(dir.path(), config)
+            .await
+            .unwrap();
 
         // Write multiple objects to test batch behavior
         let data1 = b"First object";
@@ -1211,14 +1272,18 @@ mod tests {
 
         // Verify object exists and no temp files remain
         assert!(object_path.exists());
-        
+
         // Check there are no .tmp files in the shard directory
         if let Some(shard_dir) = object_path.parent() {
             let mut entries = fs::read_dir(shard_dir).await.unwrap();
             while let Some(entry) = entries.next_entry().await.unwrap() {
                 let filename = entry.file_name();
                 let filename_str = filename.to_string_lossy();
-                assert!(!filename_str.ends_with(".tmp"), "Found temp file: {}", filename_str);
+                assert!(
+                    !filename_str.ends_with(".tmp"),
+                    "Found temp file: {}",
+                    filename_str
+                );
             }
         }
     }
@@ -1233,44 +1298,46 @@ mod tests {
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
         };
-        
+
         // Create store without recovery
-        let store = ContentStore::new_with_config(dir.path(), config.clone()).await.unwrap();
-        
+        let store = ContentStore::new_with_config(dir.path(), config.clone())
+            .await
+            .unwrap();
+
         // Simulate incomplete write by creating a temp file manually
         let data = b"Incomplete write test";
         let mut hasher = Hasher::new();
         hasher.update(data);
         let hash = ContentHash::from_blake3(hasher.finalize());
         let object_path = store.object_path(&hash);
-        
+
         // Ensure shard directory exists
         if let Some(parent) = object_path.parent() {
             fs::create_dir_all(parent).await.unwrap();
         }
-        
+
         // Create temp file
         let temp_path = {
             let mut temp_name = object_path.file_name().unwrap().to_os_string();
             temp_name.push(".tmp");
             object_path.parent().unwrap().join(temp_name)
         };
-        
+
         fs::write(&temp_path, data).await.unwrap();
         assert!(temp_path.exists());
-        
+
         // Run recovery
         let stats = store.recover().await.unwrap();
-        
+
         // Should have recovered the temp file
         assert_eq!(stats.recovered, 1);
         assert_eq!(stats.cleaned, 0);
         assert!(stats.errors.is_empty());
-        
+
         // Temp file should be gone, object file should exist
         assert!(!temp_path.exists());
         assert!(object_path.exists());
-        
+
         // Should be able to read the recovered object
         let read_data = store.read(&hash).await.unwrap();
         assert_eq!(&read_data[..], data);
@@ -1280,38 +1347,38 @@ mod tests {
     async fn test_recovery_clean_corrupted_temp_files() {
         let dir = tempdir().unwrap();
         let store = ContentStore::new(dir.path()).await.unwrap();
-        
+
         // Create a corrupted temp file (wrong content for the filename)
         let correct_data = b"Correct data";
         let mut hasher = Hasher::new();
         hasher.update(correct_data);
         let hash = ContentHash::from_blake3(hasher.finalize());
         let object_path = store.object_path(&hash);
-        
+
         // Ensure shard directory exists
         if let Some(parent) = object_path.parent() {
             fs::create_dir_all(parent).await.unwrap();
         }
-        
+
         // Create temp file with wrong content
         let temp_path = {
             let mut temp_name = object_path.file_name().unwrap().to_os_string();
             temp_name.push(".tmp");
             object_path.parent().unwrap().join(temp_name)
         };
-        
+
         let wrong_data = b"Wrong data that doesn't match hash";
         fs::write(&temp_path, wrong_data).await.unwrap();
         assert!(temp_path.exists());
-        
+
         // Run recovery
         let stats = store.recover().await.unwrap();
-        
+
         // Should have cleaned up the corrupted temp file
         assert_eq!(stats.recovered, 0);
         assert_eq!(stats.cleaned, 1);
         assert!(stats.errors.is_empty());
-        
+
         // Both temp and object files should be gone
         assert!(!temp_path.exists());
         assert!(!object_path.exists());
@@ -1321,31 +1388,31 @@ mod tests {
     async fn test_recovery_skip_existing_objects() {
         let dir = tempdir().unwrap();
         let store = ContentStore::new(dir.path()).await.unwrap();
-        
+
         // Write an object normally
         let data = b"Normal write test";
         let obj_ref = store.write(data).await.unwrap();
         let object_path = store.object_path(&obj_ref.hash);
-        
+
         // Create a temp file that would correspond to the same object
         let temp_path = {
             let mut temp_name = object_path.file_name().unwrap().to_os_string();
             temp_name.push(".tmp");
             object_path.parent().unwrap().join(temp_name)
         };
-        
+
         fs::write(&temp_path, data).await.unwrap();
         assert!(temp_path.exists());
         assert!(object_path.exists());
-        
+
         // Run recovery
         let stats = store.recover().await.unwrap();
-        
+
         // Should have cleaned up the redundant temp file
         assert_eq!(stats.recovered, 0);
         assert_eq!(stats.cleaned, 1);
         assert!(stats.errors.is_empty());
-        
+
         // Object should still exist, temp should be gone
         assert!(object_path.exists());
         assert!(!temp_path.exists());
@@ -1355,7 +1422,7 @@ mod tests {
     async fn test_concurrent_writes() {
         let dir = tempdir().unwrap();
         let store = Arc::new(ContentStore::new(dir.path()).await.unwrap());
-        
+
         // Launch multiple concurrent writes
         let mut handles = Vec::new();
         for i in 0..10 {
@@ -1366,25 +1433,28 @@ mod tests {
             });
             handles.push(handle);
         }
-        
+
         // Wait for all writes to complete
         let mut obj_refs = Vec::new();
         for handle in handles {
             let obj_ref = handle.await.unwrap().unwrap();
             obj_refs.push(obj_ref);
         }
-        
+
         // Verify all objects can be read back correctly
         for (i, obj_ref) in obj_refs.iter().enumerate() {
             let expected_data = format!("Concurrent write test data {}", i);
             let read_data = store.read(&obj_ref.hash).await.unwrap();
-            assert_eq!(String::from_utf8(read_data.to_vec()).unwrap(), expected_data);
+            assert_eq!(
+                String::from_utf8(read_data.to_vec()).unwrap(),
+                expected_data
+            );
         }
-        
+
         // Verify no temp files remain
         let objects_dir = store.root_path.join("objects");
         let mut stack = vec![objects_dir];
-        
+
         while let Some(current_dir) = stack.pop() {
             let mut dir_entries = fs::read_dir(&current_dir).await.unwrap();
             while let Some(entry) = dir_entries.next_entry().await.unwrap() {
@@ -1394,7 +1464,11 @@ mod tests {
                 } else {
                     let filename = entry.file_name();
                     let filename_str = filename.to_string_lossy();
-                    assert!(!filename_str.ends_with(".tmp"), "Found temp file after concurrent writes: {}", filename_str);
+                    assert!(
+                        !filename_str.ends_with(".tmp"),
+                        "Found temp file after concurrent writes: {}",
+                        filename_str
+                    );
                 }
             }
         }
@@ -1403,16 +1477,16 @@ mod tests {
     #[tokio::test]
     async fn test_recovery_on_startup() {
         let dir = tempdir().unwrap();
-        
+
         // Create some temp files manually to simulate crash
         let data1 = b"Recovery test data 1";
         let data2 = b"Recovery test data 2";
-        
+
         // Create valid temp files in the correct shard directories
         let mut hasher = Hasher::new();
         hasher.update(data1);
         let hash1 = ContentHash::from_blake3(hasher.finalize());
-        
+
         // Use the same sharding logic as ContentStore
         let hex1 = hash1.to_hex();
         let (shard1_1, rest1) = hex1.split_at(2);
@@ -1421,11 +1495,11 @@ mod tests {
         fs::create_dir_all(&shard_dir1).await.unwrap();
         let temp_path1 = shard_dir1.join(format!("{}.tmp", filename1));
         fs::write(&temp_path1, data1).await.unwrap();
-        
+
         let mut hasher = Hasher::new();
         hasher.update(data2);
         let hash2 = ContentHash::from_blake3(hasher.finalize());
-        
+
         let hex2 = hash2.to_hex();
         let (shard1_2, rest2) = hex2.split_at(2);
         let (shard2_2, filename2) = rest2.split_at(2);
@@ -1433,7 +1507,7 @@ mod tests {
         fs::create_dir_all(&shard_dir2).await.unwrap();
         let temp_path2 = shard_dir2.join(format!("{}.tmp", filename2));
         fs::write(&temp_path2, b"corrupted data").await.unwrap(); // Wrong content
-        
+
         // Create store with recovery enabled
         let config = ContentStoreConfig {
             fsync_policy: FsyncPolicy::Always,
@@ -1442,18 +1516,26 @@ mod tests {
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
         };
-        
-        let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
-        
+
+        let store = ContentStore::new_with_config(dir.path(), config)
+            .await
+            .unwrap();
+
         // Recovery should have happened during initialization
         // Check that valid temp file was recovered
         let object_path1 = store.object_path(&hash1);
-        assert!(object_path1.exists(), "Valid temp file should have been recovered");
+        assert!(
+            object_path1.exists(),
+            "Valid temp file should have been recovered"
+        );
         assert!(!temp_path1.exists(), "Temp file should be cleaned up");
-        
+
         // Check that corrupted temp file was cleaned up
-        assert!(!temp_path2.exists(), "Corrupted temp file should be cleaned up");
-        
+        assert!(
+            !temp_path2.exists(),
+            "Corrupted temp file should be cleaned up"
+        );
+
         // Should be able to read the recovered object
         let read_data = store.read(&hash1).await.unwrap();
         assert_eq!(&read_data[..], data1);
@@ -1469,12 +1551,14 @@ mod tests {
             packfile_config: PackfileConfig::default(),
             enable_packfiles: false, // Disable for this test
         };
-        let store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
-        
+        let store = ContentStore::new_with_config(dir.path(), config)
+            .await
+            .unwrap();
+
         // Test that directory fsync doesn't fail
         let test_dir = dir.path().join("test_fsync");
         fs::create_dir_all(&test_dir).await.unwrap();
-        
+
         // This should not panic or error
         store.fsync_directory(&test_dir).await.unwrap();
     }
@@ -1495,54 +1579,56 @@ mod tests {
             },
             enable_packfiles: true, // Enable for this test
         };
-        
-        let mut store = ContentStore::new_with_config(dir.path(), config).await.unwrap();
-        
+
+        let mut store = ContentStore::new_with_config(dir.path(), config)
+            .await
+            .unwrap();
+
         // Write small objects that should go into packfiles
         let small_data1 = b"Small chunk 1";
         let small_data2 = b"Small chunk 2";
         let small_data3 = b"Small chunk 3";
-        
+
         let obj1 = store.write(small_data1).await.unwrap();
         let obj2 = store.write(small_data2).await.unwrap();
         let obj3 = store.write(small_data3).await.unwrap();
-        
+
         // Write large object that should be stored individually
         let large_data = vec![42u8; 2048]; // 2KB, above threshold
         let large_obj = store.write(&large_data).await.unwrap();
-        
+
         // Flush any pending packfile operations
         store.flush_packfiles().await.unwrap();
-        
+
         // Verify all objects can be read back
         let read1 = store.read(&obj1.hash).await.unwrap();
         let read2 = store.read(&obj2.hash).await.unwrap();
         let read3 = store.read(&obj3.hash).await.unwrap();
         let read_large = store.read(&large_obj.hash).await.unwrap();
-        
+
         assert_eq!(&read1[..], small_data1);
         assert_eq!(&read2[..], small_data2);
         assert_eq!(&read3[..], small_data3);
         assert_eq!(&read_large[..], &large_data[..]);
-        
+
         // Check that objects exist
         assert!(store.exists(&obj1.hash).await);
         assert!(store.exists(&obj2.hash).await);
         assert!(store.exists(&obj3.hash).await);
         assert!(store.exists(&large_obj.hash).await);
-        
+
         // Get stats including packfile data
         let stats = store.stats().await.unwrap();
         assert_eq!(stats.object_count, 4);
-        
+
         // Get packfile-specific stats
         let packfile_stats = store.packfile_stats();
         assert!(packfile_stats.is_some());
         let pack_stats = packfile_stats.unwrap();
-        
+
         // Should have at least some objects in packfiles (the small ones)
         assert!(pack_stats.total_objects >= 2); // At least the small chunks
-        
+
         // Finalize packfiles
         store.finalize_packfiles().await.unwrap();
     }

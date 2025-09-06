@@ -97,7 +97,8 @@ impl DiffResult {
     /// Sort changes by priority for optimal transfer ordering
     pub fn prioritize_changes(&mut self) {
         self.changes.sort_by(|a, b| {
-            b.priority().cmp(&a.priority())
+            b.priority()
+                .cmp(&a.priority())
                 .then_with(|| a.transfer_size.cmp(&b.transfer_size))
         });
     }
@@ -154,11 +155,7 @@ impl DiffComputer {
     /// - Added: Files in target but not in source
     /// - Modified: Files in both with different content
     /// - Deleted: Files in source but not in target
-    pub fn compute_diff(
-        &self,
-        source: &Manifest,
-        target: &Manifest,
-    ) -> Result<DiffResult> {
+    pub fn compute_diff(&self, source: &Manifest, target: &Manifest) -> Result<DiffResult> {
         info!(
             "Computing diff: {} -> {} (v{} -> v{})",
             source.folder_id, target.folder_id, source.version, target.version
@@ -169,17 +166,9 @@ impl DiffComputer {
         let mut stats = DiffStats::default();
 
         // Create lookup maps for efficient comparison
-        let source_map: HashMap<_, _> = source
-            .files
-            .iter()
-            .map(|f| (f.path.clone(), f))
-            .collect();
+        let source_map: HashMap<_, _> = source.files.iter().map(|f| (f.path.clone(), f)).collect();
 
-        let target_map: HashMap<_, _> = target
-            .files
-            .iter()
-            .map(|f| (f.path.clone(), f))
-            .collect();
+        let target_map: HashMap<_, _> = target.files.iter().map(|f| (f.path.clone(), f)).collect();
 
         // Find added and modified files
         for (path, target_entry) in &target_map {
@@ -188,7 +177,7 @@ impl DiffComputer {
                     // File added
                     let required = self.find_required_chunks(target_entry);
                     let transfer_size = self.calculate_transfer_size(&required);
-                    
+
                     stats.files_added += 1;
                     stats.bytes_to_add += target_entry.size;
                     required_chunks.extend(required.iter().cloned());
@@ -259,15 +248,9 @@ impl DiffComputer {
 
         // Calculate total statistics
         stats.unique_chunks = required_chunks.len();
-        stats.total_chunks = changes
-            .iter()
-            .map(|c| c.required_chunks.len())
-            .sum();
+        stats.total_chunks = changes.iter().map(|c| c.required_chunks.len()).sum();
 
-        let total_transfer_size = changes
-            .iter()
-            .map(|c| c.transfer_size)
-            .sum();
+        let total_transfer_size = changes.iter().map(|c| c.transfer_size).sum();
 
         // Compute merkle proof if enabled
         let merkle_proof = if self.enable_merkle_proofs {
@@ -308,11 +291,7 @@ impl DiffComputer {
     }
 
     /// Compute chunk-level diff between two file versions
-    fn compute_chunk_diff(
-        &self,
-        source: &ManifestEntry,
-        target: &ManifestEntry,
-    ) -> Vec<String> {
+    fn compute_chunk_diff(&self, source: &ManifestEntry, target: &ManifestEntry) -> Vec<String> {
         // Create set of source chunks for fast lookup
         let source_chunks: HashSet<_> = source.chunk_hashes.iter().collect();
 
@@ -320,9 +299,7 @@ impl DiffComputer {
         target
             .chunk_hashes
             .iter()
-            .filter(|hash| {
-                !source_chunks.contains(hash) && !self.chunk_cache.contains(*hash)
-            })
+            .filter(|hash| !source_chunks.contains(hash) && !self.chunk_cache.contains(*hash))
             .cloned()
             .collect()
     }
@@ -370,16 +347,11 @@ impl DiffComputer {
     fn compute_subtree_hashes(&self, manifest: &Manifest) -> Result<Vec<Vec<u8>>> {
         // Divide files into subtrees based on path prefixes
         let mut subtrees = HashMap::new();
-        
+
         for file in &manifest.files {
             // Get first path component as subtree key
-            let subtree_key = file
-                .path
-                .split('/')
-                .next()
-                .unwrap_or("")
-                .to_string();
-            
+            let subtree_key = file.path.split('/').next().unwrap_or("").to_string();
+
             subtrees
                 .entry(subtree_key)
                 .or_insert_with(Vec::new)
@@ -444,15 +416,19 @@ impl IncrementalDiff {
         );
 
         // Compute the diff
-        let diff = self.diff_computer.compute_diff(peer_manifest, current_manifest)?;
+        let diff = self
+            .diff_computer
+            .compute_diff(peer_manifest, current_manifest)?;
 
         // Track pending changes
         if diff.has_changes() {
-            self.pending_changes.insert(peer_id.to_string(), diff.changes.clone());
+            self.pending_changes
+                .insert(peer_id.to_string(), diff.changes.clone());
         }
 
         // Update last known version
-        self.last_versions.insert(peer_id.to_string(), current_manifest.version);
+        self.last_versions
+            .insert(peer_id.to_string(), current_manifest.version);
 
         Ok(diff)
     }
@@ -570,11 +546,9 @@ mod tests {
         let computer = DiffComputer::new(chunk_cache);
 
         let mut source = create_test_manifest("test", 1);
-        source.files.push(create_test_entry(
-            "old.txt",
-            "hash1",
-            vec!["chunk1"],
-        ));
+        source
+            .files
+            .push(create_test_entry("old.txt", "hash1", vec!["chunk1"]));
 
         let target = create_test_manifest("test", 2);
 
@@ -591,7 +565,7 @@ mod tests {
         let mut cache = HashSet::new();
         cache.insert("chunk1".to_string());
         cache.insert("chunk2".to_string());
-        
+
         let chunk_cache = Arc::new(cache);
         let computer = DiffComputer::new(chunk_cache);
 
@@ -663,23 +637,17 @@ mod tests {
         let mut tracker = IncrementalDiff::new(chunk_cache);
 
         let mut manifest_v1 = create_test_manifest("test", 1);
-        manifest_v1.files.push(create_test_entry(
-            "file1.txt",
-            "hash1",
-            vec!["chunk1"],
-        ));
+        manifest_v1
+            .files
+            .push(create_test_entry("file1.txt", "hash1", vec!["chunk1"]));
 
         let mut manifest_v2 = create_test_manifest("test", 2);
-        manifest_v2.files.push(create_test_entry(
-            "file1.txt",
-            "hash1",
-            vec!["chunk1"],
-        ));
-        manifest_v2.files.push(create_test_entry(
-            "file2.txt",
-            "hash2",
-            vec!["chunk2"],
-        ));
+        manifest_v2
+            .files
+            .push(create_test_entry("file1.txt", "hash1", vec!["chunk1"]));
+        manifest_v2
+            .files
+            .push(create_test_entry("file2.txt", "hash2", vec!["chunk2"]));
 
         let peer_manifest = create_test_manifest("test", 0);
 
@@ -694,7 +662,7 @@ mod tests {
             .compute_incremental("peer1", &manifest_v2, &manifest_v1)
             .unwrap();
         assert_eq!(diff2.stats.files_added, 1);
-        
+
         // Check pending changes
         assert!(tracker.get_pending("peer1").is_some());
     }

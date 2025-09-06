@@ -1,10 +1,10 @@
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
-use notify::{Watcher, RecommendedWatcher, RecursiveMode, Event, EventKind};
 use tokio::sync::Mutex;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 /// File system change event
 #[derive(Debug, Clone)]
@@ -54,8 +54,8 @@ impl FileWatcher {
         let running = self.running.clone();
 
         // Create notify watcher
-        let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-            match res {
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<Event, notify::Error>| match res {
                 Ok(event) => {
                     if let Err(e) = tx.send(event) {
                         error!("Failed to send file event: {}", e);
@@ -64,12 +64,11 @@ impl FileWatcher {
                 Err(e) => {
                     error!("File watcher error: {}", e);
                 }
-            }
-        })?;
+            })?;
 
         // Start watching
         watcher.watch(&path, RecursiveMode::Recursive)?;
-        
+
         info!("Started watching directory: {}", path.display());
 
         // Spawn background task to handle events
@@ -98,7 +97,8 @@ impl FileWatcher {
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         // Process batched events if we have any and timeout elapsed
-                        if !pending_events.is_empty() && last_batch_time.elapsed() >= BATCH_TIMEOUT {
+                        if !pending_events.is_empty() && last_batch_time.elapsed() >= BATCH_TIMEOUT
+                        {
                             let events = std::mem::take(&mut pending_events);
                             debug!("Processing {} batched file events", events.len());
                             callback(events);
@@ -154,18 +154,18 @@ fn convert_notify_event(event: Event) -> Option<Vec<FileEvent>> {
             if name.starts_with('.') {
                 return true;
             }
-            
+
             // Ignore temporary files
             if name.ends_with('~') || name.ends_with(".tmp") || name.ends_with(".swp") {
                 return true;
             }
-            
+
             // Ignore common editor temp files
             if name.starts_with("#") && name.ends_with("#") {
                 return true;
             }
         }
-        
+
         false
     };
 
@@ -211,20 +211,22 @@ mod tests {
     async fn test_file_watcher() {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path().to_path_buf();
-        
+
         let watcher = FileWatcher::new(temp_path.clone()).unwrap();
-        
+
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
-        
+
         // Start watching
-        watcher.start(move |file_events| {
-            let events = events_clone.clone();
-            tokio::spawn(async move {
-                let mut guard = events.lock().await;
-                guard.extend(file_events);
-            });
-        }).unwrap();
+        watcher
+            .start(move |file_events| {
+                let events = events_clone.clone();
+                tokio::spawn(async move {
+                    let mut guard = events.lock().await;
+                    guard.extend(file_events);
+                });
+            })
+            .unwrap();
 
         // Give watcher time to start
         sleep(Duration::from_millis(100)).await;
@@ -239,7 +241,9 @@ mod tests {
         // Check we received create event
         let events_guard = events.lock().await;
         assert!(!events_guard.is_empty());
-        assert!(events_guard.iter().any(|e| e.kind == FileEventKind::Created));
+        assert!(events_guard
+            .iter()
+            .any(|e| e.kind == FileEventKind::Created));
 
         // Stop watcher
         watcher.stop().unwrap();

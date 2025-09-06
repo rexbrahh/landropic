@@ -7,6 +7,6 @@ pub mod validation;
 pub use errors::{CasError, Result};
 pub use packfile::{PackfileManager, PackfileStats};
 pub use storage::{
-    ContentStore, ContentStoreConfig, ObjectRef, StorageStats, VerificationReport,
-    FsyncPolicy, CompressionType, RecoveryStats
+    CompressionType, ContentStore, ContentStoreConfig, FsyncPolicy, ObjectRef, RecoveryStats,
+    StorageStats, VerificationReport,
 };

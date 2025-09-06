@@ -92,10 +92,18 @@ impl Clone for QuicError {
             Self::Stream(s) => Self::Stream(s.clone()),
             Self::Protocol(s) => Self::Protocol(s.clone()),
             Self::Timeout => Self::Timeout,
-            Self::HandshakeTimeout { timeout_secs } => Self::HandshakeTimeout { timeout_secs: *timeout_secs },
-            Self::HandshakeFailed { reason } => Self::HandshakeFailed { reason: reason.clone() },
-            Self::VersionMismatch { details } => Self::VersionMismatch { details: details.clone() },
-            Self::AuthenticationFailed { reason } => Self::AuthenticationFailed { reason: reason.clone() },
+            Self::HandshakeTimeout { timeout_secs } => Self::HandshakeTimeout {
+                timeout_secs: *timeout_secs,
+            },
+            Self::HandshakeFailed { reason } => Self::HandshakeFailed {
+                reason: reason.clone(),
+            },
+            Self::VersionMismatch { details } => Self::VersionMismatch {
+                details: details.clone(),
+            },
+            Self::AuthenticationFailed { reason } => Self::AuthenticationFailed {
+                reason: reason.clone(),
+            },
             Self::ServerAlreadyRunning => Self::ServerAlreadyRunning,
             Self::Crypto(e) => Self::Protocol(format!("Crypto error: {}", e)),
         }

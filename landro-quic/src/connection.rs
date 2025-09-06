@@ -6,8 +6,8 @@ use tokio::time::timeout;
 use tracing::{debug, info};
 
 use landro_proto::{
-    Hello, VersionNegotiator, PROTOCOL_VERSION,
     validation::{self, limits, Validator},
+    Hello, VersionNegotiator, PROTOCOL_VERSION,
 };
 use prost::Message;
 
@@ -96,10 +96,10 @@ impl Connection {
                 device_id.len()
             )));
         }
-        
+
         Validator::validate_device_name(device_name)
             .map_err(|e| QuicError::Protocol(format!("Invalid device name: {}", e)))?;
-        
+
         let hello = Hello {
             version: PROTOCOL_VERSION.to_string(),
             device_id: device_id.to_vec(),
@@ -112,7 +112,7 @@ impl Connection {
         hello
             .encode(&mut buf)
             .map_err(|e| QuicError::Protocol(format!("Failed to encode hello: {}", e)))?;
-        
+
         // Check encoded size
         if buf.len() > limits::MAX_MESSAGE_SIZE {
             return Err(QuicError::Protocol(format!(

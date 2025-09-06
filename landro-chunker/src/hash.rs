@@ -60,7 +60,7 @@ pub type ChunkHash = ContentHash;
 #[cfg(feature = "serde")]
 mod hash_serde {
     use super::*;
-    use serde::{Deserializer, Serializer, Deserialize, Serialize};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S>(hash: &blake3::Hash, serializer: S) -> Result<S::Ok, S::Error>
     where

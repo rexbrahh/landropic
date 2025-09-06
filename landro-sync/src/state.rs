@@ -1,7 +1,7 @@
 //! Persistent sync state management
 
-use chrono::{DateTime, Utc};
 use chrono::TimeZone;
+use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -23,9 +23,7 @@ pub enum SyncState {
         start_time: DateTime<Utc>,
     },
     /// Sync paused due to conflicts
-    Conflicted {
-        conflict_count: usize,
-    },
+    Conflicted { conflict_count: usize },
     /// Sync paused by user
     Paused,
     /// Error state
@@ -57,13 +55,9 @@ pub enum PeerState {
     /// Exchanging manifests
     Negotiating,
     /// Transferring data
-    Transferring {
-        progress: f32,
-    },
+    Transferring { progress: f32 },
     /// Sync completed successfully
-    Completed {
-        timestamp: DateTime<Utc>,
-    },
+    Completed { timestamp: DateTime<Utc> },
     /// Sync failed
     Failed {
         error: String,
@@ -197,13 +191,17 @@ impl SyncDatabase {
                 params![peer_id],
                 |row| {
                     let state_json: String = row.get(8)?;
-                    let current_state: PeerState = serde_json::from_str(&state_json)
-                        .unwrap_or(PeerState::Idle);
+                    let current_state: PeerState =
+                        serde_json::from_str(&state_json).unwrap_or(PeerState::Idle);
 
                     Ok(PeerSyncState {
                         peer_id: row.get(0)?,
                         peer_name: row.get(1)?,
-                        last_sync: row.get::<_, Option<String>>(2)?.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
+                        last_sync: row.get::<_, Option<String>>(2)?.and_then(|s| {
+                            DateTime::parse_from_rfc3339(&s)
+                                .ok()
+                                .map(|dt| dt.with_timezone(&Utc))
+                        }),
                         last_manifest_hash: row.get(3)?,
                         bytes_sent: row.get(4)?,
                         bytes_received: row.get(5)?,
@@ -220,8 +218,8 @@ impl SyncDatabase {
 
     /// Update or insert peer sync state
     pub fn upsert_peer_state(&mut self, state: &PeerSyncState) -> Result<()> {
-        let state_json = serde_json::to_string(&state.current_state)
-            .map_err(|e| SyncError::Serialization(e))?;
+        let state_json =
+            serde_json::to_string(&state.current_state).map_err(|e| SyncError::Serialization(e))?;
 
         self.conn.execute(
             r#"
@@ -271,13 +269,17 @@ impl SyncDatabase {
 
         let peer_iter = stmt.query_map([], |row| {
             let state_json: String = row.get(8)?;
-            let current_state: PeerState = serde_json::from_str(&state_json)
-                .unwrap_or(PeerState::Idle);
+            let current_state: PeerState =
+                serde_json::from_str(&state_json).unwrap_or(PeerState::Idle);
 
             Ok(PeerSyncState {
                 peer_id: row.get(0)?,
                 peer_name: row.get(1)?,
-                last_sync: row.get::<_, Option<String>>(2)?.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
+                last_sync: row.get::<_, Option<String>>(2)?.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .ok()
+                        .map(|dt| dt.with_timezone(&Utc))
+                }),
                 last_manifest_hash: row.get(3)?,
                 bytes_sent: row.get(4)?,
                 bytes_received: row.get(5)?,
@@ -317,7 +319,11 @@ impl SyncDatabase {
     }
 
     /// Get pending transfers for a peer
-    pub fn get_pending_transfers(&self, peer_id: &str, limit: usize) -> Result<Vec<PendingTransfer>> {
+    pub fn get_pending_transfers(
+        &self,
+        peer_id: &str,
+        limit: usize,
+    ) -> Result<Vec<PendingTransfer>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT id, peer_id, folder_id, file_path, chunk_hash, priority, retry_count
@@ -345,15 +351,17 @@ impl SyncDatabase {
 
     /// Remove completed transfer
     pub fn remove_pending_transfer(&mut self, id: i64) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM pending_transfers WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM pending_transfers WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     /// Remove pending transfer by peer and chunk hash
-    pub fn remove_pending_transfer_by_hash(&mut self, peer_id: &str, chunk_hash: &str) -> Result<()> {
+    pub fn remove_pending_transfer_by_hash(
+        &mut self,
+        peer_id: &str,
+        chunk_hash: &str,
+    ) -> Result<()> {
         self.conn.execute(
             "DELETE FROM pending_transfers WHERE peer_id = ?1 AND chunk_hash = ?2",
             params![peer_id, chunk_hash],
@@ -444,7 +452,11 @@ impl AsyncSyncDatabase {
     }
 
     /// Get all pending transfers for a peer
-    pub async fn get_pending_transfers(&self, peer_id: &str, limit: usize) -> Result<Vec<PendingTransfer>> {
+    pub async fn get_pending_transfers(
+        &self,
+        peer_id: &str,
+        limit: usize,
+    ) -> Result<Vec<PendingTransfer>> {
         let db = self.inner.read().await;
         db.get_pending_transfers(peer_id, limit)
     }
@@ -489,7 +501,7 @@ mod tests {
     #[test]
     fn test_sync_database() {
         let db = SyncDatabase::open_in_memory().unwrap();
-        
+
         // Test peer state operations
         let mut state = PeerSyncState {
             peer_id: "test-peer".to_string(),

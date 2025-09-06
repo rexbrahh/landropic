@@ -155,11 +155,13 @@ pub use client::QuicClient;
 pub use config::QuicConfig;
 pub use connection::{Connection, StreamType};
 pub use errors::{QuicError, Result};
-pub use parallel_transfer::{ParallelTransferConfig, ParallelTransferManager, ChunkProvider, ZeroCopyChunkSender};
+pub use parallel_transfer::{
+    ChunkProvider, ParallelTransferConfig, ParallelTransferManager, ZeroCopyChunkSender,
+};
 pub use pool::{ConnectionPool, PoolConfig, PooledConnection};
-pub use protocol::{StreamProtocol, MessageType, ProtocolMessage, BatchTransferManager};
-pub use recovery::{RetryPolicy, CircuitState, RecoveryClient, ConnectionHealthMonitor};
+pub use protocol::{BatchTransferManager, MessageType, ProtocolMessage, StreamProtocol};
+pub use recovery::{CircuitState, ConnectionHealthMonitor, RecoveryClient, RetryPolicy};
 pub use resumable::{ResumableTransferManager, TransferCheckpoint, TransferStatus};
 pub use server::QuicServer;
 pub use transfer::{QuicTransferEngine, TransferProgress};
-pub use zero_copy::{ZeroCopyFileReader, ZeroCopyStreamWriter, MmapFileReader, VectoredWriter};
+pub use zero_copy::{MmapFileReader, VectoredWriter, ZeroCopyFileReader, ZeroCopyStreamWriter};

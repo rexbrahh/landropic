@@ -8,22 +8,26 @@ use tracing::info;
 use landro_crypto::{CertificateVerifier, DeviceIdentity};
 use landro_daemon::discovery::DiscoveryService;
 use landro_daemon::network::{ConnectionManager, NetworkConfig};
-use landro_quic::{QuicServer, QuicConfig};
+use landro_quic::{QuicConfig, QuicServer};
 
 #[tokio::test]
 async fn test_mdns_discovery_integration() {
     // Initialize logging
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     // Create two discovery services
     let mut discovery1 = DiscoveryService::new("device-1").unwrap();
     let mut discovery2 = DiscoveryService::new("device-2").unwrap();
 
     // Start advertising on different ports
-    discovery1.start_advertising(9876, vec!["sync".to_string()]).await.unwrap();
-    discovery2.start_advertising(9877, vec!["sync".to_string()]).await.unwrap();
+    discovery1
+        .start_advertising(9876, vec!["sync".to_string()])
+        .await
+        .unwrap();
+    discovery2
+        .start_advertising(9877, vec!["sync".to_string()])
+        .await
+        .unwrap();
 
     // Give time for mDNS to propagate
     sleep(Duration::from_secs(2)).await;
@@ -46,9 +50,7 @@ async fn test_mdns_discovery_integration() {
 #[tokio::test]
 async fn test_connection_manager_with_discovery() {
     // Initialize logging
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     // Create identities for two devices
     let identity1 = Arc::new(DeviceIdentity::generate("device-1").unwrap());
@@ -74,13 +76,9 @@ async fn test_connection_manager_with_discovery() {
         health_check_interval: Duration::from_secs(5),
         ..Default::default()
     };
-    
-    let conn_manager = ConnectionManager::new(
-        identity1,
-        verifier,
-        discovery1.clone(),
-        network_config,
-    );
+
+    let conn_manager =
+        ConnectionManager::new(identity1, verifier, discovery1.clone(), network_config);
 
     // Start connection manager
     conn_manager.start().await.unwrap();
@@ -95,7 +93,8 @@ async fn test_connection_manager_with_discovery() {
             capabilities: vec!["sync".to_string()],
             last_seen: std::time::Instant::now(),
             version: "0.1.0".to_string(),
-        }).await;
+        })
+        .await;
     }
 
     // Wait a bit for discovery task to pick up the peer
@@ -104,13 +103,14 @@ async fn test_connection_manager_with_discovery() {
     // Try to get connection
     let connection_result = timeout(
         Duration::from_secs(10),
-        conn_manager.get_connection("device-2")
-    ).await;
+        conn_manager.get_connection("device-2"),
+    )
+    .await;
 
     match connection_result {
         Ok(Ok(_conn)) => {
             info!("Successfully established connection to device-2");
-            
+
             // Check statistics
             let stats = conn_manager.get_stats().await;
             assert_eq!(stats.total_peers, 1);
@@ -140,7 +140,7 @@ async fn test_connection_rate_limiting() {
     let identity = Arc::new(DeviceIdentity::generate("test-device").unwrap());
     let verifier = Arc::new(CertificateVerifier::for_pairing());
     let discovery = Arc::new(tokio::sync::Mutex::new(
-        DiscoveryService::new("test-device").unwrap()
+        DiscoveryService::new("test-device").unwrap(),
     ));
 
     // Configure aggressive rate limiting
@@ -149,12 +149,8 @@ async fn test_connection_rate_limiting() {
         ..Default::default()
     };
 
-    let conn_manager = ConnectionManager::new(
-        identity,
-        verifier,
-        discovery.clone(),
-        network_config,
-    );
+    let conn_manager =
+        ConnectionManager::new(identity, verifier, discovery.clone(), network_config);
 
     conn_manager.start().await.unwrap();
 
@@ -168,7 +164,8 @@ async fn test_connection_rate_limiting() {
             capabilities: vec!["sync".to_string()],
             last_seen: std::time::Instant::now(),
             version: "0.1.0".to_string(),
-        }).await;
+        })
+        .await;
     }
 
     // Try to connect multiple times rapidly
@@ -210,14 +207,12 @@ async fn test_connection_rate_limiting() {
 #[tokio::test]
 async fn test_connection_health_checks() {
     // Initialize logging
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     let identity = Arc::new(DeviceIdentity::generate("test-device").unwrap());
     let verifier = Arc::new(CertificateVerifier::for_pairing());
     let discovery = Arc::new(tokio::sync::Mutex::new(
-        DiscoveryService::new("test-device").unwrap()
+        DiscoveryService::new("test-device").unwrap(),
     ));
 
     // Configure fast health checks
@@ -227,12 +222,7 @@ async fn test_connection_health_checks() {
         ..Default::default()
     };
 
-    let conn_manager = ConnectionManager::new(
-        identity,
-        verifier,
-        discovery,
-        network_config,
-    );
+    let conn_manager = ConnectionManager::new(identity, verifier, discovery, network_config);
 
     conn_manager.start().await.unwrap();
 

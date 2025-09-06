@@ -5,10 +5,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use landro_index::manifest::{Manifest, ManifestEntry};
-use landro_sync::{
-    DiffComputer, DiffResult, ChangeType,
-    IncrementalDiff, FileChange,
-};
+use landro_sync::{ChangeType, DiffComputer, DiffResult, FileChange, IncrementalDiff};
 
 fn create_test_manifest(folder_id: &str, version: u64) -> Manifest {
     Manifest {
@@ -103,8 +100,12 @@ fn test_manifest_diff_comprehensive() {
     assert_eq!(modified[0].path, "modified.rs");
     // Should only need new chunks (chunk_m3, chunk_m4)
     assert_eq!(modified[0].required_chunks.len(), 2);
-    assert!(modified[0].required_chunks.contains(&"chunk_m3".to_string()));
-    assert!(modified[0].required_chunks.contains(&"chunk_m4".to_string()));
+    assert!(modified[0]
+        .required_chunks
+        .contains(&"chunk_m3".to_string()));
+    assert!(modified[0]
+        .required_chunks
+        .contains(&"chunk_m4".to_string()));
 
     // Verify deleted file
     let deleted = diff.changes_by_type(ChangeType::Deleted);
@@ -122,18 +123,23 @@ fn test_diff_with_chunk_cache() {
     let mut cache = HashSet::new();
     cache.insert("chunk_existing1".to_string());
     cache.insert("chunk_existing2".to_string());
-    
+
     let chunk_cache = Arc::new(cache);
     let computer = DiffComputer::new(chunk_cache);
 
     let source = create_test_manifest("test", 1);
-    
+
     let mut target = create_test_manifest("test", 2);
     target.files.push(create_test_entry(
         "file.txt",
         5000,
         "hash_new",
-        vec!["chunk_existing1", "chunk_existing2", "chunk_new1", "chunk_new2"],
+        vec![
+            "chunk_existing1",
+            "chunk_existing2",
+            "chunk_new1",
+            "chunk_new2",
+        ],
     ));
 
     let diff = computer.compute_diff(&source, &target).unwrap();
@@ -203,7 +209,7 @@ fn test_diff_priority_ordering() {
     let computer = DiffComputer::new(chunk_cache);
 
     let source = create_test_manifest("test", 1);
-    
+
     let mut target = create_test_manifest("test", 2);
     // Large new file
     target.files.push(create_test_entry(
@@ -235,14 +241,25 @@ fn test_diff_priority_ordering() {
         vec!["chunk_old"],
     ));
 
-    let mut diff = computer.compute_diff(&source_with_modified, &target).unwrap();
-    
+    let mut diff = computer
+        .compute_diff(&source_with_modified, &target)
+        .unwrap();
+
     // Check that prioritization works correctly
     diff.prioritize_changes();
-    
-    assert_eq!(diff.changes[0].path, "modified.rs", "Modified files should be first");
-    assert_eq!(diff.changes[1].path, "small.txt", "Small files should be second");
-    assert_eq!(diff.changes[2].path, "large.bin", "Large files should be last");
+
+    assert_eq!(
+        diff.changes[0].path, "modified.rs",
+        "Modified files should be first"
+    );
+    assert_eq!(
+        diff.changes[1].path, "small.txt",
+        "Small files should be second"
+    );
+    assert_eq!(
+        diff.changes[2].path, "large.bin",
+        "Large files should be last"
+    );
 }
 
 #[test]
@@ -304,16 +321,22 @@ fn test_large_manifest_diff_performance() {
         let path = format!("file_{:04}.txt", i);
         let hash = format!("hash_{:04}", i);
         let chunks: Vec<&str> = vec!["chunk1", "chunk2"];
-        
-        source.files.push(create_test_entry(&path, 1024, &hash, chunks.clone()));
-        
+
+        source
+            .files
+            .push(create_test_entry(&path, 1024, &hash, chunks.clone()));
+
         // Modify every 10th file in target
         if i % 10 == 0 {
             let new_hash = format!("hash_{:04}_new", i);
             let new_chunks = vec!["chunk1", "chunk3"];
-            target.files.push(create_test_entry(&path, 2048, &new_hash, new_chunks));
+            target
+                .files
+                .push(create_test_entry(&path, 2048, &new_hash, new_chunks));
         } else {
-            target.files.push(create_test_entry(&path, 1024, &hash, chunks));
+            target
+                .files
+                .push(create_test_entry(&path, 1024, &hash, chunks));
         }
     }
 
@@ -322,7 +345,9 @@ fn test_large_manifest_diff_performance() {
         let path = format!("new_file_{:04}.txt", i);
         let hash = format!("new_hash_{:04}", i);
         let chunks = vec!["new_chunk1", "new_chunk2"];
-        target.files.push(create_test_entry(&path, 512, &hash, chunks));
+        target
+            .files
+            .push(create_test_entry(&path, 512, &hash, chunks));
     }
 
     let start = std::time::Instant::now();
@@ -330,7 +355,11 @@ fn test_large_manifest_diff_performance() {
     let duration = start.elapsed();
 
     // Performance check - should complete quickly even with many files
-    assert!(duration.as_millis() < 100, "Diff took too long: {:?}", duration);
+    assert!(
+        duration.as_millis() < 100,
+        "Diff took too long: {:?}",
+        duration
+    );
 
     // Verify correctness
     assert_eq!(diff.stats.files_modified, 100); // Every 10th file modified
@@ -344,12 +373,7 @@ fn test_metadata_only_changes() {
     let computer = DiffComputer::new(chunk_cache);
 
     let mut source = create_test_manifest("test", 1);
-    let mut entry1 = create_test_entry(
-        "file.txt",
-        1024,
-        "hash1",
-        vec!["chunk1", "chunk2"],
-    );
+    let mut entry1 = create_test_entry("file.txt", 1024, "hash1", vec!["chunk1", "chunk2"]);
     entry1.mode = Some(0o644);
     source.files.push(entry1);
 
@@ -369,7 +393,7 @@ fn test_metadata_only_changes() {
     // it's classified as metadata-only change
     assert_eq!(diff.stats.files_metadata_only, 1);
     assert_eq!(diff.stats.files_modified, 0);
-    
+
     // Check that it's a metadata-only change
     let change = &diff.changes[0];
     assert_eq!(change.change_type, ChangeType::MetadataOnly);

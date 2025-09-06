@@ -11,11 +11,11 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, Mutex, mpsc};
-use tracing::{info, warn, error, debug};
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tracing::{debug, error, info, warn};
 
 // Using mdns-sd for more reliable cross-platform mDNS
-use mdns_sd::{ServiceDaemon, ServiceInfo, ServiceEvent};
+use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
 /// Service type for landropic sync
 const SERVICE_TYPE: &str = "_landropic._tcp.local.";
@@ -48,11 +48,11 @@ pub struct DiscoveryService {
 impl DiscoveryService {
     /// Create a new discovery service
     pub fn new(device_name: &str) -> Result<Self, String> {
-        let mdns = ServiceDaemon::new()
-            .map_err(|e| format!("Failed to create mDNS daemon: {}", e))?;
-        
+        let mdns =
+            ServiceDaemon::new().map_err(|e| format!("Failed to create mDNS daemon: {}", e))?;
+
         let device_id = generate_device_id();
-        
+
         Ok(Self {
             device_id: device_id.clone(),
             device_name: device_name.to_string(),
@@ -84,7 +84,7 @@ impl DiscoveryService {
         // Create service info
         let service_name = format!("landropic-{}", &self.device_id[..8]);
         let host_name = format!("{}.local.", gethostname::gethostname().to_string_lossy());
-        
+
         let mut properties = HashMap::new();
         properties.insert("device_id".to_string(), self.device_id.clone());
         properties.insert("device_name".to_string(), self.device_name.clone());
@@ -95,10 +95,11 @@ impl DiscoveryService {
             SERVICE_TYPE,
             &service_name,
             &host_name,
-            (),  // Will be filled with actual IPs
+            (), // Will be filled with actual IPs
             port,
             Some(properties),
-        ).map_err(|e| format!("Failed to create service info: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to create service info: {}", e))?;
 
         // Register the service
         let mdns = self.mdns.lock().await;
@@ -110,8 +111,11 @@ impl DiscoveryService {
         self.start_browsing().await?;
 
         *self.running.write().await = true;
-        info!("mDNS advertising started for device: {} ({})", self.device_name, self.device_id);
-        
+        info!(
+            "mDNS advertising started for device: {} ({})",
+            self.device_name, self.device_id
+        );
+
         Ok(())
     }
 
@@ -120,7 +124,8 @@ impl DiscoveryService {
         debug!("Starting mDNS browsing for peers");
 
         let mdns = self.mdns.lock().await;
-        let receiver = mdns.browse(SERVICE_TYPE)
+        let receiver = mdns
+            .browse(SERVICE_TYPE)
             .map_err(|e| format!("Failed to start browsing: {}", e))?;
         drop(mdns);
 
@@ -159,18 +164,18 @@ impl DiscoveryService {
                         }
 
                         debug!("Discovered service: {}", info.get_fullname());
-                        
+
                         if let Some(peer_info) = parse_service_info(&info) {
                             let mut peers = discovered_peers.write().await;
                             let peer_id = peer_info.device_id.clone();
-                            
+
                             if !peers.contains_key(&peer_id) {
-                                info!("Discovered new peer: {} ({}) at {}", 
-                                      peer_info.device_name, 
-                                      peer_info.device_id,
-                                      peer_info.address);
+                                info!(
+                                    "Discovered new peer: {} ({}) at {}",
+                                    peer_info.device_name, peer_info.device_id, peer_info.address
+                                );
                             }
-                            
+
                             peers.insert(peer_id, peer_info);
                         }
                     }
@@ -204,9 +209,7 @@ impl DiscoveryService {
         // Clean up old peers (remove peers not seen in last 5 minutes)
         let now = Instant::now();
         let mut peers = self.discovered_peers.write().await;
-        peers.retain(|_, peer| {
-            now.duration_since(peer.last_seen) < Duration::from_secs(300)
-        });
+        peers.retain(|_, peer| now.duration_since(peer.last_seen) < Duration::from_secs(300));
 
         // Return current discovered peers
         Ok(peers.values().cloned().collect())
@@ -222,12 +225,20 @@ impl DiscoveryService {
 
     /// Get all discovered peers
     pub async fn get_all_peers(&self) -> Vec<PeerInfo> {
-        self.discovered_peers.read().await.values().cloned().collect()
+        self.discovered_peers
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Update or add a peer
     pub async fn update_peer(&mut self, peer: PeerInfo) {
-        self.discovered_peers.write().await.insert(peer.device_id.clone(), peer);
+        self.discovered_peers
+            .write()
+            .await
+            .insert(peer.device_id.clone(), peer);
     }
 
     /// Remove a peer
@@ -287,11 +298,14 @@ impl DiscoveryService {
 /// Parse service info into PeerInfo
 fn parse_service_info(info: &ServiceInfo) -> Option<PeerInfo> {
     let properties = info.get_properties();
-    
+
     let device_id = properties.get_property_val_str("device_id")?.to_string();
     let device_name = properties.get_property_val_str("device_name")?.to_string();
-    let version = properties.get_property_val_str("version").unwrap_or("unknown").to_string();
-    
+    let version = properties
+        .get_property_val_str("version")
+        .unwrap_or("unknown")
+        .to_string();
+
     let capabilities = properties
         .get_property_str("capabilities")
         .map(|c| c.split(',').map(|s| s.to_string()).collect())
@@ -305,7 +319,8 @@ fn parse_service_info(info: &ServiceInfo) -> Option<PeerInfo> {
     }
 
     // Prefer IPv4 addresses for compatibility
-    let ip = addresses.iter()
+    let ip = addresses
+        .iter()
         .find(|addr| matches!(addr, IpAddr::V4(_)))
         .or_else(|| addresses.iter().next())
         .cloned()?;
@@ -325,19 +340,19 @@ fn parse_service_info(info: &ServiceInfo) -> Option<PeerInfo> {
 /// Generate a unique device ID for this session
 fn generate_device_id() -> String {
     use std::time::SystemTime;
-    
+
     let timestamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    
+
     // Include hostname for better uniqueness
     let hostname = gethostname::gethostname()
         .to_string_lossy()
         .chars()
         .take(8)
         .collect::<String>();
-    
+
     format!("{:x}_{}", timestamp, hostname)
 }
 
@@ -347,7 +362,7 @@ impl Drop for DiscoveryService {
             // Best effort cleanup
             let mdns = self.mdns.clone();
             let task = self.background_task.clone();
-            
+
             tokio::spawn(async move {
                 if let Some(t) = task.lock().await.take() {
                     t.abort();
@@ -378,10 +393,10 @@ mod tests {
         let id1 = generate_device_id();
         sleep(Duration::from_millis(10)).await;
         let id2 = generate_device_id();
-        
+
         // IDs should be unique
         assert_ne!(id1, id2);
-        
+
         // IDs should have expected format
         assert!(id1.contains('_'));
         assert!(id2.contains('_'));
@@ -390,7 +405,7 @@ mod tests {
     #[tokio::test]
     async fn test_peer_management() {
         let mut discovery = DiscoveryService::new("test-device").unwrap();
-        
+
         let peer = PeerInfo {
             device_id: "test_peer_1".to_string(),
             device_name: "Test Peer".to_string(),
@@ -399,16 +414,16 @@ mod tests {
             last_seen: Instant::now(),
             version: "0.1.0".to_string(),
         };
-        
+
         // Add peer
         discovery.update_peer(peer.clone()).await;
         assert_eq!(discovery.peer_count(), 1);
-        
+
         // Get peer
         let retrieved = discovery.get_peer("test_peer_1");
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().device_name, "Test Peer");
-        
+
         // Remove peer
         let removed = discovery.remove_peer("test_peer_1").await;
         assert!(removed.is_some());
@@ -418,12 +433,14 @@ mod tests {
     #[tokio::test]
     async fn test_start_stop_advertising() {
         let mut discovery = DiscoveryService::new("test-device").unwrap();
-        
+
         // Start advertising
-        let result = discovery.start_advertising(9999, vec!["sync".to_string()]).await;
+        let result = discovery
+            .start_advertising(9999, vec!["sync".to_string()])
+            .await;
         assert!(result.is_ok());
         assert!(discovery.is_running());
-        
+
         // Stop
         let result = discovery.stop().await;
         assert!(result.is_ok());

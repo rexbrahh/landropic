@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, Mutex};
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::interval;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 use crate::client::QuicClient;
 use crate::connection::Connection;
@@ -140,7 +140,7 @@ impl ConnectionPool {
         // Create new connection
         info!("Creating new connection to {}", peer_addr);
         let connection = self.create_connection_with_retry(peer_addr).await?;
-        
+
         // Add to pool
         self.add_to_pool(peer_addr, connection.clone()).await?;
 
@@ -210,7 +210,7 @@ impl ConnectionPool {
     /// Check if we can create a new connection
     async fn can_create_new_connection(&self, peer_addr: SocketAddr) -> bool {
         let connections = self.connections.read().await;
-        
+
         // Check total connection limit
         let total_connections: usize = connections.values().map(|v| v.len()).sum();
         if total_connections >= self.config.max_total_connections {
@@ -253,10 +253,7 @@ impl ConnectionPool {
                     last_error = Some(e);
                 }
                 Err(_) => {
-                    error!(
-                        "Connection attempt {} timed out for {}",
-                        attempt, peer_addr
-                    );
+                    error!("Connection attempt {} timed out for {}", attempt, peer_addr);
                     last_error = Some(QuicError::Timeout);
                 }
             }

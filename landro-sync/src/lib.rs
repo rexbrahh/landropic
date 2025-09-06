@@ -1,5 +1,5 @@
 //! Synchronization orchestration for landropic
-//! 
+//!
 //! This crate provides the central synchronization engine that manages:
 //! - Sync state persistence and recovery
 //! - Conflict detection and resolution
@@ -19,11 +19,14 @@ pub mod scheduler;
 pub mod state;
 
 pub use conflict::{ConflictResolution, ConflictResolver, ConflictType};
-pub use diff::{DiffComputer, DiffResult, FileChange, ChangeType, IncrementalDiff};
-pub use errors::{SyncError, Result};
-pub use orchestrator::{SyncOrchestrator, SyncConfig};
+pub use diff::{ChangeType, DiffComputer, DiffResult, FileChange, IncrementalDiff};
+pub use errors::{Result, SyncError};
+pub use orchestrator::{SyncConfig, SyncOrchestrator};
 pub use progress::{SyncProgress, TransferProgress};
-pub use protocol::{SyncSession, SessionState, TransferStats};
-pub use recovery::{RecoveryManager, Operation, OperationType, OperationStatus, RecoveryStats, generate_operation_id};
-pub use scheduler::{TransferScheduler, TransferPriority};
-pub use state::{SyncState, PeerSyncState, AsyncSyncDatabase};
+pub use protocol::{SessionState, SyncSession, TransferStats};
+pub use recovery::{
+    generate_operation_id, Operation, OperationStatus, OperationType, RecoveryManager,
+    RecoveryStats,
+};
+pub use scheduler::{TransferPriority, TransferScheduler};
+pub use state::{AsyncSyncDatabase, PeerSyncState, SyncState};

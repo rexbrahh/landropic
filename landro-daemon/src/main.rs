@@ -8,9 +8,9 @@ use tracing_subscriber;
 use landro_cas::ContentStore;
 use landro_chunker::{Chunker, ChunkerConfig};
 use landro_daemon::{
-    orchestrator::{OrchestratorConfig, OrchestratorMessage, SyncOrchestrator},
     discovery::DiscoveryService,
-    watcher::{FileWatcher, FileEvent},
+    orchestrator::{OrchestratorConfig, OrchestratorMessage, SyncOrchestrator},
+    watcher::{FileEvent, FileWatcher},
 };
 use landro_index::async_indexer::AsyncIndexer;
 
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parse command line arguments (simplified for now)
     let storage_path = PathBuf::from(
-        std::env::var("LANDROPIC_STORAGE").unwrap_or_else(|_| ".landropic".to_string())
+        std::env::var("LANDROPIC_STORAGE").unwrap_or_else(|_| ".landropic".to_string()),
     );
     let device_name = whoami::devicename();
 
@@ -37,39 +37,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize core components
     info!("Initializing content store at {:?}", cas_path);
     let store = Arc::new(ContentStore::new(&cas_path).await?);
-    
+
     info!("Initializing chunker");
     let chunker_config = ChunkerConfig {
-        min_size: 16 * 1024,      // 16KB minimum
-        avg_size: 64 * 1024,      // 64KB average  
-        max_size: 256 * 1024,     // 256KB maximum
-        mask_bits: 16,            // For 64KB average (2^16)
+        min_size: 16 * 1024,  // 16KB minimum
+        avg_size: 64 * 1024,  // 64KB average
+        max_size: 256 * 1024, // 256KB maximum
+        mask_bits: 16,        // For 64KB average (2^16)
     };
-    let chunker = Arc::new(Chunker::new(chunker_config)?); 
-    
+    let chunker = Arc::new(Chunker::new(chunker_config)?);
+
     info!("Initializing indexer");
-    let indexer = Arc::new(
-        AsyncIndexer::new(
-            &cas_path,
-            &db_path,
-            Default::default(),
-        ).await?
-    );
+    let indexer = Arc::new(AsyncIndexer::new(&cas_path, &db_path, Default::default()).await?);
 
     // Create orchestrator
     let config = OrchestratorConfig::default();
-    let (mut orchestrator, tx) = SyncOrchestrator::new(
-        config,
-        store,
-        chunker,
-        indexer,
-        &storage_path,
-    ).await?;
+    let (mut orchestrator, tx) =
+        SyncOrchestrator::new(config, store, chunker, indexer, &storage_path).await?;
 
     // Set up callbacks for integration with network layer
     let tx_clone = tx.clone();
     orchestrator.set_peer_sync_callback(move |peer_id, folders| {
-        info!("Sync needed with peer {} for {} folders", peer_id, folders.len());
+        info!(
+            "Sync needed with peer {} for {} folders",
+            peer_id,
+            folders.len()
+        );
         // In a real implementation, this would trigger network sync
     });
 
@@ -81,7 +74,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start discovery service
     info!("Starting mDNS discovery service");
     let mut discovery = DiscoveryService::new(&device_name)?;
-    discovery.start_advertising(9876, vec!["sync".to_string(), "transfer".to_string()]).await?;
+    discovery
+        .start_advertising(9876, vec!["sync".to_string(), "transfer".to_string()])
+        .await?;
 
     // Monitor peer discovery
     let tx_discovery = tx.clone();
@@ -92,7 +87,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match discovery.browse_peers().await {
                 Ok(peers) => {
                     for peer in peers {
-                        let _ = tx_discovery.send(OrchestratorMessage::PeerDiscovered(peer)).await;
+                        let _ = tx_discovery
+                            .send(OrchestratorMessage::PeerDiscovered(peer))
+                            .await;
                     }
                 }
                 Err(e) => {
@@ -105,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Set up file watchers for default sync folders
     let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let sync_folder = home_dir.join("LandropicSync");
-    
+
     // Create default sync folder if it doesn't exist
     if !sync_folder.exists() {
         info!("Creating default sync folder at {:?}", sync_folder);
@@ -123,7 +120,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     // Add the sync folder to orchestrator
-    tx.send(OrchestratorMessage::AddSyncFolder(sync_folder.clone())).await?;
+    tx.send(OrchestratorMessage::AddSyncFolder(sync_folder.clone()))
+        .await?;
 
     // Spawn the orchestrator
     let orchestrator_handle = tokio::spawn(async move {
@@ -138,16 +136,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Graceful shutdown
     info!("Shutting down daemon...");
-    
+
     // Stop file watcher
     watcher.stop()?;
-    
+
     // Send shutdown message to orchestrator
     tx.send(OrchestratorMessage::Shutdown).await?;
-    
+
     // Wait for orchestrator to finish
     orchestrator_handle.await?;
-    
+
     // Abort discovery task
     discovery_handle.abort();
 
