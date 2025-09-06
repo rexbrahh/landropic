@@ -5,6 +5,8 @@
 #![allow(clippy::cognitive_complexity)]
 #![allow(clippy::assigning_clones)]
 #![allow(clippy::float_cmp)]
+#![allow(clippy::missing_const_for_fn)]
+#![allow(clippy::missing_errors_doc)]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

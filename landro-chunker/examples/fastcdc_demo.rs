@@ -23,8 +23,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (
             "Medium chunks",
             ChunkerConfig {
-                min_size: 8192,   // 8KB
-                avg_size: 32768,  // 32KB
+                min_size: 8192,    // 8KB
+                avg_size: 32768,   // 32KB
                 max_size: 131_072, // 128KB
                 mask_bits: 15,
             },
@@ -32,8 +32,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (
             "Large chunks",
             ChunkerConfig {
-                min_size: 65536,   // 64KB
-                avg_size: 262_144,  // 256KB
+                min_size: 65536,     // 64KB
+                avg_size: 262_144,   // 256KB
                 max_size: 1_048_576, // 1MB
                 mask_bits: 18,
             },

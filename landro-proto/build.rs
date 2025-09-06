@@ -2,7 +2,7 @@ use std::io::Result;
 
 fn main() -> Result<()> {
     let mut config = prost_build::Config::new();
-    
+
     // Add Eq derive only to message types, not enums (they already have it)
     config.type_attribute("landro.proto.Hello", "#[derive(Eq)]");
     config.type_attribute("landro.proto.FolderSummary", "#[derive(Eq)]");

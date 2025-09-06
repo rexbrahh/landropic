@@ -8,8 +8,8 @@ use std::hint::black_box as std_black_box;
 
 fn generate_test_data(size: usize, pattern: u8) -> Vec<u8> {
     match pattern {
-        0 => vec![0u8; size],                                            // All zeros
-        1 => (0..size).map(|i| (i % 256) as u8).collect(),               // Sequential pattern
+        0 => vec![0u8; size],                                              // All zeros
+        1 => (0..size).map(|i| (i % 256) as u8).collect(),                 // Sequential pattern
         2 => (0..size).map(|i| ((i * 123_456_789) % 256) as u8).collect(), // Pseudo-random pattern
         _ => {
             // Real random-ish pattern using simple PRNG

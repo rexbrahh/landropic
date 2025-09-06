@@ -6,6 +6,7 @@
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::manual_range_contains)]
+#![allow(clippy::missing_errors_doc)]
 
 use thiserror::Error;
 

@@ -233,7 +233,8 @@ impl Chunker {
         let data_len = data.len();
 
         while offset < data_len as u64 {
-            let start = usize::try_from(offset.min(usize::MAX as u64)).expect("offset should fit in usize");
+            let start =
+                usize::try_from(offset.min(usize::MAX as u64)).expect("offset should fit in usize");
             let remaining = data_len - start;
 
             // Enforce minimum chunk size
@@ -299,8 +300,8 @@ impl Chunker {
 
             // Remove the oldest byte's contribution (it has been rotated left WINDOW_SIZE times)
             // and add the new byte
-            let old_contribution =
-                self.gear_table[old_byte as usize].rotate_left(u32::try_from(WINDOW_SIZE).expect("WINDOW_SIZE fits in u32"));
+            let old_contribution = self.gear_table[old_byte as usize]
+                .rotate_left(u32::try_from(WINDOW_SIZE).expect("WINDOW_SIZE fits in u32"));
             hash = hash.wrapping_sub(old_contribution);
             hash = hash
                 .rotate_left(1)
@@ -524,7 +525,9 @@ mod tests {
         #[test]
         fn test_boundary_consistency() {
             // Test that chunk boundaries are consistent across different input sizes
-            let base_data = (0..20_000).map(|i| u8::try_from(i % 256).expect("modulo fits in u8")).collect::<Vec<_>>();
+            let base_data = (0..20_000)
+                .map(|i| u8::try_from(i % 256).expect("modulo fits in u8"))
+                .collect::<Vec<_>>();
             let chunker = Chunker::new(test_config()).unwrap();
 
             // Chunk the full data
