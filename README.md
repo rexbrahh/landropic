@@ -2,8 +2,7 @@
 
 **Cross-platform encrypted LAN file sync - AirDrop for everyone**
 
-[![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/landropic/landropic#license)
+[![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org) [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/landropic/landropic#license)
 
 Landropic is a secure, fast, and reliable file synchronization tool designed for local networks. It provides end-to-end encryption, automatic device discovery, and efficient chunked file transfer using modern protocols.
 
@@ -44,7 +43,7 @@ cargo install --path .
    ```bash
    # On first device - show pairing QR code
    landropic pair --show-qr
-   
+
    # On second device - scan QR or enter code
    landropic pair --code "ABC123..."
    ```
@@ -53,7 +52,7 @@ cargo install --path .
    ```bash
    # Sync once
    landropic sync ~/Documents/MyFolder
-   
+
    # Watch for continuous changes
    landropic sync ~/Documents/MyFolder --watch
    ```
@@ -76,7 +75,7 @@ Landropic runs a background daemon to handle continuous synchronization:
 # Start the daemon
 landropic daemon start
 
-# Check daemon status  
+# Check daemon status
 landropic daemon status
 
 # Stop the daemon
@@ -111,7 +110,7 @@ Landropic uses a modular architecture with clear separation of concerns:
 
 ```
 ┌─────────────────────────────────────┐
-│      Application Layer              │ ← File sync, deduplication  
+│      Application Layer              │ ← File sync, deduplication
 ├─────────────────────────────────────┤
 │      Landropic Protocol             │ ← Custom sync protocol (protobuf)
 ├─────────────────────────────────────┤
@@ -144,8 +143,9 @@ Landropic stores configuration and data in these locations:
 - **Windows**: `%APPDATA%\landropic\`
 
 Key files:
+
 - `config.json`: Device configuration and settings
-- `identity/`: Ed25519 device identity keys  
+- `identity/`: Ed25519 device identity keys
 - `objects/`: Content-addressable storage for file chunks
 - `index.sqlite`: File metadata and sync state database
 
@@ -212,6 +212,7 @@ Landropic is designed for high performance on local networks:
 - **Optimized Protocol**: QUIC's multiplexed streams eliminate head-of-line blocking
 
 Expected performance on 1Gbps LAN:
+
 - Large file transfers: ~800-900 Mbps throughput
 - Small file changes: Sub-second propagation
 - Discovery latency: <2 seconds for device detection
@@ -238,7 +239,7 @@ at your option.
 ## Documentation
 
 - 📚 [User Guide](docs/USER_GUIDE.md) - Getting started and everyday usage
-- 🔧 [CLI Reference](docs/CLI_REFERENCE.md) - Complete command documentation  
+- 🔧 [CLI Reference](docs/CLI_REFERENCE.md) - Complete command documentation
 - 🏗️ [Developer Setup](docs/DEVELOPER_SETUP.md) - Development environment setup
 - 📐 [API Reference](docs/API_REFERENCE.md) - Rust crate APIs and examples
 - 🔒 [Security & Protocols](docs/PROTOCOLS_AND_SECURITY.md) - Cryptography and network protocols
@@ -252,5 +253,3 @@ at your option.
 - 🚀 [Quick Start Guide](docs/USER_GUIDE.md#getting-started)
 
 ---
-
-**Built with ❤️ in Rust**

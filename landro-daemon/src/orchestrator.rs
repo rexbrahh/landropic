@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 use crate::discovery::PeerInfo;
 use crate::watcher::{FileEvent, FileEventKind};
 use crate::network::{ConnectionManager, NetworkConfig};
-use landro_cas::ContentStore;
+use landro_cas::{ContentStore, Hash};
 use landro_chunker::Chunker;
 use landro_index::async_indexer::AsyncIndexer;
 use landro_quic::{QuicServer, QuicConfig, Connection};
@@ -186,7 +186,7 @@ impl SyncOrchestrator {
         // Perform protocol handshake
         connection.receive_hello().await?;
         connection.send_hello(
-            self.device_identity.device_id_bytes(),
+            self.device_identity.device_id().as_bytes(),
             &self.device_identity.device_name(),
         ).await?;
         
@@ -272,7 +272,7 @@ impl SyncOrchestrator {
         recv.read_exact(&mut chunk_hash).await?;
         
         // Retrieve chunk from store
-        let hash = landro_cas::Hash::from_bytes(&chunk_hash)?;
+        let hash = Hash::from_bytes(&chunk_hash)?;
         let chunk_data = store.read(&hash).await?;
         
         // Send chunk data
@@ -1036,7 +1036,7 @@ impl SyncOrchestrator {
         let read_size = 1024 * 1024; // 1MB read buffer
         let mut buffer = Vec::with_capacity(read_size * 2);
         let mut total_chunks = 0;
-        let mut _file_offset = 0u64;
+        let mut file_offset = 0u64;
 
         loop {
             // Read next chunk from file

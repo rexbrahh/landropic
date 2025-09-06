@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
-use chrono::{DateTime, Utc};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
@@ -288,7 +287,7 @@ impl SyncEngine {
             folder_id: format!("remote_{}", path.file_name().unwrap_or_default().to_string_lossy()),
             version: 1,
             files: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: SystemTime::now().into(),
             manifest_hash: None,
         })
     }
