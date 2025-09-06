@@ -1,3 +1,7 @@
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::explicit_iter_loop)]
+#![allow(clippy::semicolon_if_nothing_returned)]
+
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use landro_chunker::{Chunker, ChunkerConfig};
 use std::hint::black_box as std_black_box;
@@ -6,13 +10,13 @@ fn generate_test_data(size: usize, pattern: u8) -> Vec<u8> {
     match pattern {
         0 => vec![0u8; size],                                            // All zeros
         1 => (0..size).map(|i| (i % 256) as u8).collect(),               // Sequential pattern
-        2 => (0..size).map(|i| ((i * 123456789) % 256) as u8).collect(), // Pseudo-random pattern
+        2 => (0..size).map(|i| ((i * 123_456_789) % 256) as u8).collect(), // Pseudo-random pattern
         _ => {
             // Real random-ish pattern using simple PRNG
             let mut data = Vec::with_capacity(size);
-            let mut seed = 0x3DAE66B0C5E15E79u64;
+            let mut seed = 0x3DAE_66B0_C5E1_5E79_u64;
             for _ in 0..size {
-                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
                 data.push((seed >> 24) as u8);
             }
             data

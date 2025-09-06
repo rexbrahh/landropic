@@ -4,6 +4,11 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Protocol buffer definitions for Landropic encrypted file sync"
+repository.workspace = true
+readme = "README.md"
+keywords = ["protocol", "protobuf", "sync", "encryption"]
+categories = ["network-programming", "encoding"]
 
 [dependencies]
 prost = { workspace = true }

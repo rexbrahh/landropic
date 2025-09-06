@@ -1,3 +1,9 @@
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::option_if_let_else)]
+#![allow(clippy::cognitive_complexity)]
+#![allow(clippy::manual_unwrap_or)]
+
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::collections::HashMap;
@@ -328,12 +334,11 @@ impl CertificateVerifier {
                             let mut device_id_bytes = [0u8; 32];
                             device_id_bytes.copy_from_slice(ext.value);
                             return Some(DeviceId(device_id_bytes));
-                        } else {
-                            warn!(
-                                "Device ID extension has wrong length: {} (expected 32)",
-                                ext.value.len()
-                            );
                         }
+                        warn!(
+                            "Device ID extension has wrong length: {} (expected 32)",
+                            ext.value.len()
+                        );
                     }
                 }
                 debug!("No landropic device ID extension found in certificate");

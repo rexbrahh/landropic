@@ -1,3 +1,11 @@
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::explicit_iter_loop)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::redundant_clone)]
+#![allow(clippy::cast_lossless)]
+
 use landro_chunker::{Chunker, ChunkerConfig};
 use std::collections::HashMap;
 
@@ -156,11 +164,11 @@ async fn test_async_streaming() {
 
     // Chunk asynchronously
     let cursor = std::io::Cursor::new(data.clone());
-    let chunks_async = chunker.chunk_stream(cursor).await.unwrap();
+    let stream_chunks = chunker.chunk_stream(cursor).await.unwrap();
 
     // Results should be identical
-    assert_eq!(chunks_sync.len(), chunks_async.len());
-    for (sync_chunk, async_chunk) in chunks_sync.iter().zip(chunks_async.iter()) {
+    assert_eq!(chunks_sync.len(), stream_chunks.len());
+    for (sync_chunk, async_chunk) in chunks_sync.iter().zip(stream_chunks.iter()) {
         assert_eq!(sync_chunk.hash, async_chunk.hash);
         assert_eq!(sync_chunk.offset, async_chunk.offset);
         assert_eq!(sync_chunk.data, async_chunk.data);

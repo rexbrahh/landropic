@@ -289,14 +289,14 @@ impl PackfileWriter {
 /// Reader for accessing chunks in existing packfiles (async version)
 #[derive(Debug, Clone)]
 pub struct PackfileReader {
-    file_path: PathBuf,
+    _file_path: PathBuf,
     entries: HashMap<ContentHash, PackfileEntry>,
     stats: PackfileStats,
 }
 
 /// Memory-mapped reader for zero-copy access to packfile chunks
 pub struct MmapPackfileReader {
-    file_path: PathBuf,
+    _file_path: PathBuf,
     entries: HashMap<ContentHash, PackfileEntry>,
     stats: PackfileStats,
     mmap: Arc<memmap2::Mmap>,
@@ -367,7 +367,7 @@ impl PackfileReader {
         debug!("Opened packfile {:?} with {} chunks", path, entries.len());
 
         Ok(Self {
-            file_path: path.to_path_buf(),
+            _file_path: path.to_path_buf(),
             entries,
             stats,
         })
@@ -380,7 +380,7 @@ impl PackfileReader {
             .get(hash)
             .ok_or_else(|| CasError::ObjectNotFound(*hash))?;
 
-        let mut file = File::open(&self.file_path).await?;
+        let mut file = File::open(&self._file_path).await?;
 
         // Seek to chunk data
         file.seek(SeekFrom::Start(entry.offset)).await?;
@@ -547,7 +547,7 @@ impl MmapPackfileReader {
         );
 
         Ok(Self {
-            file_path: path.to_path_buf(),
+            _file_path: path.to_path_buf(),
             entries,
             stats,
             mmap,

@@ -4,6 +4,11 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "SQLite-based file index and manifest management for Landropic"
+repository.workspace = true
+readme = "README.md"
+keywords = ["database", "index", "manifest", "sqlite"]
+categories = ["database", "filesystem"]
 
 [dependencies]
 landro-chunker = { path = "../landro-chunker" }

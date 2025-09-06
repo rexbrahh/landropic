@@ -1,4 +1,10 @@
 //! Sync protocol message handlers and state machine
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::significant_drop_tightening)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::cognitive_complexity)]
+#![allow(clippy::assigning_clones)]
+#![allow(clippy::float_cmp)]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -11,7 +17,7 @@ use crate::generated::{
 use crate::{VersionNegotiator, PROTOCOL_VERSION};
 
 /// Sync session state
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncState {
     /// Initial state, waiting for Hello message
     WaitingForHello,

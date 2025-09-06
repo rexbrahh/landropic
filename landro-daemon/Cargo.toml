@@ -4,6 +4,11 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Background daemon service for Landropic file synchronization"
+repository.workspace = true
+readme = "README.md"
+keywords = ["daemon", "service", "mdns", "sync"]
+categories = ["network-programming", "filesystem"]
 
 [dependencies]
 landro-proto = { path = "../landro-proto" }

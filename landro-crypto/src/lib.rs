@@ -8,6 +8,7 @@
 //! - Mutual TLS (mTLS) setup with device ID verification
 //! - Secure key storage with appropriate file permissions
 //!
+#![allow(clippy::must_use_candidate)]
 //! ## Key Components
 //!
 //! - [`DeviceIdentity`]: Long-term Ed25519 identity keys for devices

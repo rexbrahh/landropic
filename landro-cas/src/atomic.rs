@@ -332,7 +332,7 @@ mod tests {
         writer.flush().await.unwrap();
 
         // Simulate crash - don't commit, just drop
-        let temp_path = writer.temp_path.clone();
+        let _temp_path = writer.temp_path.clone();
         drop(writer);
 
         // Check for resumable write

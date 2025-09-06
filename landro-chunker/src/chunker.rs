@@ -5,7 +5,7 @@ use tracing::trace;
 use crate::errors::{ChunkerError, Result};
 use crate::hash::ChunkHash;
 
-/// FastCDC chunking configuration
+/// `FastCDC` chunking configuration
 #[derive(Debug, Clone)]
 pub struct ChunkerConfig {
     /// Minimum chunk size in bytes
@@ -32,6 +32,10 @@ impl Default for ChunkerConfig {
 impl ChunkerConfig {
     /// Validate configuration
     pub fn validate(&self) -> Result<()> {
+        // Validate absolute limits (using proto validation limits)
+        const MIN_CHUNK_SIZE: usize = 256; // 256 bytes minimum
+        const MAX_CHUNK_SIZE: usize = 16 * 1024 * 1024; // 16 MB maximum
+
         // Validate size relationships
         if self.min_size >= self.avg_size {
             return Err(ChunkerError::InvalidConfig(
@@ -43,10 +47,6 @@ impl ChunkerConfig {
                 "avg_size must be less than max_size".to_string(),
             ));
         }
-
-        // Validate absolute limits (using proto validation limits)
-        const MIN_CHUNK_SIZE: usize = 256; // 256 bytes minimum
-        const MAX_CHUNK_SIZE: usize = 16 * 1024 * 1024; // 16 MB maximum
 
         if self.min_size < MIN_CHUNK_SIZE {
             return Err(ChunkerError::InvalidConfig(format!(
@@ -81,9 +81,9 @@ pub struct Chunk {
     pub offset: u64,
 }
 
-/// FastCDC chunker for content-defined chunking.
+/// `FastCDC` chunker for content-defined chunking.
 ///
-/// This implements a content-defined chunking algorithm based on FastCDC,
+/// This implements a content-defined chunking algorithm based on `FastCDC`,
 /// which uses a rolling hash to find chunk boundaries. The chunker is
 /// configured with minimum, average, and maximum chunk sizes.
 ///
@@ -130,7 +130,7 @@ impl Chunker {
     /// Chunk data from an async reader.
     ///
     /// This method efficiently chunks large files that don't fit in memory using
-    /// the FastCDC algorithm with buffered reading and rolling hash computation.
+    /// the `FastCDC` algorithm with buffered reading and rolling hash computation.
     ///
     /// # Arguments
     ///
@@ -214,7 +214,7 @@ impl Chunker {
     ///
     /// This method processes the entire data slice and returns a vector of chunks.
     /// Currently uses a simple fixed-size chunking as a placeholder for the
-    /// full FastCDC implementation.
+    /// full `FastCDC` implementation.
     ///
     /// # Arguments
     ///
@@ -223,13 +223,17 @@ impl Chunker {
     /// # Returns
     ///
     /// A vector of chunks with their hashes and offsets
+    ///
+    /// # Panics
+    ///
+    /// Panics if the offset exceeds platform's usize limits (only on 32-bit systems with very large files)
     pub fn chunk_bytes(&self, data: &[u8]) -> Result<Vec<Chunk>> {
         let mut chunks = Vec::new();
         let mut offset = 0u64;
         let data_len = data.len();
 
-        while (offset as usize) < data_len {
-            let start = offset as usize;
+        while offset < data_len as u64 {
+            let start = usize::try_from(offset.min(usize::MAX as u64)).expect("offset should fit in usize");
             let remaining = data_len - start;
 
             // Enforce minimum chunk size
@@ -260,10 +264,10 @@ impl Chunker {
         Ok(chunks)
     }
 
-    /// Find optimal chunk boundary using FastCDC rolling hash.
+    /// Find optimal chunk boundary using `FastCDC` rolling hash.
     ///
-    /// Scans from start_pos to max_pos looking for a boundary where the
-    /// rolling hash matches our mask pattern. This implements the FastCDC
+    /// Scans from `start_pos` to `max_pos` looking for a boundary where the
+    /// rolling hash matches our mask pattern. This implements the `FastCDC`
     /// algorithm with a rolling hash over a sliding window.
     fn find_chunk_boundary(&self, data: &[u8], start_pos: usize, max_pos: usize) -> usize {
         const WINDOW_SIZE: usize = 48;
@@ -296,7 +300,7 @@ impl Chunker {
             // Remove the oldest byte's contribution (it has been rotated left WINDOW_SIZE times)
             // and add the new byte
             let old_contribution =
-                self.gear_table[old_byte as usize].rotate_left(WINDOW_SIZE as u32);
+                self.gear_table[old_byte as usize].rotate_left(u32::try_from(WINDOW_SIZE).expect("WINDOW_SIZE fits in u32"));
             hash = hash.wrapping_sub(old_contribution);
             hash = hash
                 .rotate_left(1)
@@ -315,20 +319,20 @@ impl Chunker {
     /// Generate the gear table for the rolling hash.
     ///
     /// This uses a deterministic pseudo-random generator to create a lookup table
-    /// for the FastCDC rolling hash. The table provides good distribution
+    /// for the `FastCDC` rolling hash. The table provides good distribution
     /// for content-defined chunking.
     fn generate_gear_table() -> [u64; 256] {
         let mut table = [0u64; 256];
         let mut state = 0x45aa_bbcc_ddee_ff00u64; // Fixed seed for deterministic results
 
-        for i in 0..256 {
+        for (i, entry) in table.iter_mut().enumerate() {
             // Use xorshift algorithm for pseudo-random generation
             state ^= state << 13;
             state ^= state >> 7;
             state ^= state << 17;
 
             // Ensure good distribution by mixing with index
-            table[i] = state.wrapping_add((i as u64).wrapping_mul(0x517c_c1b7_2722_0a95));
+            *entry = state.wrapping_add((i as u64).wrapping_mul(0x517c_c1b7_2722_0a95));
         }
 
         table
@@ -436,7 +440,7 @@ mod tests {
             // Create test data with known patterns
             let mut data = Vec::new();
             for i in 0..10000 {
-                data.push((i % 256) as u8);
+                data.push(u8::try_from(i % 256).expect("modulo fits in u8"));
             }
 
             let chunker = Chunker::new(test_config()).unwrap();
@@ -520,7 +524,7 @@ mod tests {
         #[test]
         fn test_boundary_consistency() {
             // Test that chunk boundaries are consistent across different input sizes
-            let base_data = (0..20000).map(|i| (i % 256) as u8).collect::<Vec<_>>();
+            let base_data = (0..20_000).map(|i| u8::try_from(i % 256).expect("modulo fits in u8")).collect::<Vec<_>>();
             let chunker = Chunker::new(test_config()).unwrap();
 
             // Chunk the full data
@@ -553,6 +557,7 @@ mod tests {
         }
 
         #[test]
+        #[allow(clippy::cast_precision_loss)] // Acceptable in tests for average calculations
         fn test_production_config_sizes() {
             // Test with production configuration (256KB min, 1MB avg, 4MB max)
             let chunker = Chunker::new(production_config()).unwrap();
@@ -562,10 +567,10 @@ mod tests {
             for i in 0..(10 * 1024 * 1024) {
                 // Mix of patterns to trigger different chunk boundaries
                 let byte = match i % 1024 {
-                    0..=255 => (i % 256) as u8,
-                    256..=511 => ((i / 256) % 256) as u8,
-                    512..=767 => ((i / 512) % 256) as u8,
-                    _ => ((i / 1024) % 256) as u8,
+                    0..=255 => u8::try_from(i % 256).expect("modulo fits in u8"),
+                    256..=511 => u8::try_from((i / 256) % 256).expect("modulo fits in u8"),
+                    512..=767 => u8::try_from((i / 512) % 256).expect("modulo fits in u8"),
+                    _ => u8::try_from((i / 1024) % 256).expect("modulo fits in u8"),
                 };
                 data.push(byte);
             }
@@ -632,7 +637,7 @@ mod tests {
 
             // Create 5MB of test data
             let data: Vec<u8> = (0..(5 * 1024 * 1024))
-                .map(|i| ((i * 31 + 17) % 256) as u8)
+                .map(|i| u8::try_from((i * 31 + 17) % 256).expect("modulo fits in u8"))
                 .collect();
 
             // Chunk the same data multiple times
@@ -690,7 +695,7 @@ mod tests {
 
         proptest! {
             #[test]
-            fn test_chunk_size_bounds(data in prop::collection::vec(any::<u8>(), 0..100000)) {
+            fn test_chunk_size_bounds(data in prop::collection::vec(any::<u8>(), 0..100_000)) {
                 let config = ChunkerConfig {
                     min_size: 1024,
                     avg_size: 4096,
@@ -739,6 +744,7 @@ mod tests {
             }
 
             #[test]
+            #[allow(clippy::cast_precision_loss)] // Acceptable in tests for ratio calculations
             fn test_chunk_uniqueness(data in prop::collection::vec(any::<u8>(), 1000..50000)) {
                 let chunker = Chunker::default();
                 let chunks = chunker.chunk_bytes(&data).unwrap();
@@ -753,13 +759,14 @@ mod tests {
             }
 
             #[test]
+            #[allow(clippy::cast_precision_loss)] // Acceptable in tests for average calculations
             fn test_average_chunk_size_convergence(seed in 0u64..1000) {
                 // Generate larger datasets to test average convergence
                 let mut data = Vec::new();
                 let mut rng_state = seed;
-                for _ in 0..200000 {
-                    rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
-                    data.push((rng_state >> 24) as u8);
+                for _ in 0..200_000 {
+                    rng_state = rng_state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    data.push(u8::try_from((rng_state >> 24) & 0xff).expect("masked fits in u8"));
                 }
 
                 let config = ChunkerConfig {
@@ -779,7 +786,7 @@ mod tests {
                     // Allow for more variance since FastCDC can have significant deviation
                     // especially with certain data patterns
                     let ratio = actual_avg / expected_avg;
-                    prop_assert!(ratio >= 0.3 && ratio <= 3.0,
+                    prop_assert!((0.3..=3.0).contains(&ratio),
                                "Average chunk size {} too far from expected {}, ratio: {}",
                                actual_avg, expected_avg, ratio);
                 }

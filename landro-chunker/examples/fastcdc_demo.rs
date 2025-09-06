@@ -1,6 +1,10 @@
 use landro_chunker::{Chunker, ChunkerConfig};
 use std::collections::HashMap;
 
+#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::uninlined_format_args)]
+#[allow(clippy::cast_lossless)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("FastCDC Implementation Demo");
     println!("===========================\n");
@@ -21,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ChunkerConfig {
                 min_size: 8192,   // 8KB
                 avg_size: 32768,  // 32KB
-                max_size: 131072, // 128KB
+                max_size: 131_072, // 128KB
                 mask_bits: 15,
             },
         ),
@@ -29,8 +33,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Large chunks",
             ChunkerConfig {
                 min_size: 65536,   // 64KB
-                avg_size: 262144,  // 256KB
-                max_size: 1048576, // 1MB
+                avg_size: 262_144,  // 256KB
+                max_size: 1_048_576, // 1MB
                 mask_bits: 18,
             },
         ),
@@ -127,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn generate_varied_test_data(size: usize) -> Vec<u8> {
     let mut data = Vec::with_capacity(size);
-    let mut seed = 0x3DAE66B0C5E15E79u64;
+    let mut seed = 0x3DAE_66B0_C5E1_5E79_u64;
 
     // Create sections with different patterns
     let section_size = size / 4;
@@ -145,7 +149,7 @@ fn generate_varied_test_data(size: usize) -> Vec<u8> {
 
     // Section 3: Pseudo-random
     for _ in 0..section_size {
-        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
         data.push((seed >> 24) as u8);
     }
 
@@ -154,7 +158,7 @@ fn generate_varied_test_data(size: usize) -> Vec<u8> {
         if i % 100 < 50 {
             data.push((i % 256) as u8);
         } else {
-            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
             data.push((seed >> 24) as u8);
         }
     }

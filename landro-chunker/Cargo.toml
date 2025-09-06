@@ -4,6 +4,11 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Content-defined chunking with FastCDC for Landropic"
+repository.workspace = true
+readme = "README.md"
+keywords = ["chunking", "deduplication", "fastcdc", "blake3"]
+categories = ["algorithms", "filesystem"]
 
 [dependencies]
 blake3 = { workspace = true }

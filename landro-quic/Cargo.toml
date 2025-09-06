@@ -4,6 +4,11 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "QUIC transport layer for Landropic encrypted file sync"
+repository.workspace = true
+readme = "README.md"
+keywords = ["quic", "networking", "transport", "encryption"]
+categories = ["network-programming", "asynchronous"]
 
 [dependencies]
 landro-crypto = { path = "../landro-crypto" }

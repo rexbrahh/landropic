@@ -1,6 +1,11 @@
 #![doc = include_str!("../README.md")]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::uninlined_format_args)]
 
 pub mod generated {
+    #![allow(clippy::doc_markdown)]
+    #![allow(clippy::must_use_candidate)]
+    #![allow(clippy::missing_const_for_fn)]
     include!("generated/landro.proto.rs");
 }
 

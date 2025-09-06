@@ -1,31 +1,34 @@
-use blake3;
 use std::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-/// Content hash wrapper for blake3::Hash
+/// Content hash wrapper for `blake3::Hash`
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ContentHash(#[cfg_attr(feature = "serde", serde(with = "hash_serde"))] blake3::Hash);
 
 impl ContentHash {
     /// Create from blake3 hash
-    pub fn from_blake3(hash: blake3::Hash) -> Self {
+    #[must_use]
+    pub const fn from_blake3(hash: blake3::Hash) -> Self {
         Self(hash)
     }
 
     /// Get as bytes
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
         self.0.as_bytes()
     }
 
     /// Create from bytes
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(blake3::Hash::from_bytes(bytes))
     }
 
     /// Convert to hex string
+    #[must_use]
     pub fn to_hex(&self) -> String {
         self.0.to_hex().to_string()
     }
@@ -59,7 +62,7 @@ pub type ChunkHash = ContentHash;
 
 #[cfg(feature = "serde")]
 mod hash_serde {
-    use super::*;
+    use blake3;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S>(hash: &blake3::Hash, serializer: S) -> Result<S::Ok, S::Error>

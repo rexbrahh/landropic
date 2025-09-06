@@ -1,4 +1,11 @@
 //! Input validation and size limits for protocol messages
+#![allow(clippy::missing_const_for_fn)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::redundant_closure_for_method_calls)]
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::manual_range_contains)]
 
 use thiserror::Error;
 

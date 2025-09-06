@@ -4,6 +4,11 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Cryptographic operations and key management for Landropic"
+repository.workspace = true
+readme = "README.md"
+keywords = ["crypto", "encryption", "ed25519", "x25519"]
+categories = ["cryptography", "network-programming"]
 
 [features]
 default = []

@@ -4,6 +4,11 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Content-addressed storage system for Landropic"
+repository.workspace = true
+readme = "README.md"
+keywords = ["storage", "content-addressed", "deduplication", "cas"]
+categories = ["filesystem", "data-structures"]
 
 [dependencies]
 landro-chunker = { path = "../landro-chunker" }

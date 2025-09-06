@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Cross-platform encrypted LAN file sync - AirDrop for everyone"
+readme = "README.md"
+keywords = ["sync", "encryption", "file-transfer", "lan", "airdrop"]
+categories = ["filesystem", "network-programming", "cryptography"]
 
 # Integration package dependencies
 [dependencies]

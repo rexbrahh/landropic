@@ -4,6 +4,11 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Command-line interface for Landropic encrypted file sync"
+repository.workspace = true
+readme = "README.md"
+keywords = ["cli", "command-line", "sync", "encryption"]
+categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
 name = "landropic"

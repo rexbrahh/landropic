@@ -1,3 +1,7 @@
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::semicolon_if_nothing_returned)]
+#![allow(clippy::uninlined_format_args)]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use landro_chunker::{Chunker, ChunkerConfig};
 use std::io::Cursor;

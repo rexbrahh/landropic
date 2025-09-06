@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "File synchronization engine for Landropic"
+readme = "README.md"
+keywords = ["sync", "synchronization", "diff", "manifest"]
+categories = ["filesystem", "algorithms"]
 
 [dependencies]
 # Internal crates
