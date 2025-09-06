@@ -9,12 +9,19 @@ use tracing::{debug, error, info, warn};
 
 use landro_index::{
     async_indexer::AsyncIndexer,
-    differ::{DiffEngine, DiffResult, ConflictResolution},
-    manifest::{Manifest, FileEntry},
+    manifest::Manifest,
+    FileEntry,
 };
 use landro_cas::ContentStore;
 
 use crate::discovery::PeerInfo;
+
+/// Simple conflict resolution strategy for v1.0
+#[derive(Debug, Clone)]
+pub enum ConflictStrategy {
+    NewerWins,
+    Manual,
+}
 
 /// Transfer direction
 #[derive(Debug, Clone, PartialEq)]
@@ -47,14 +54,14 @@ pub struct TransferJob {
 #[derive(Debug, Clone)]
 pub struct SyncEngineConfig {
     pub auto_sync: bool,
-    pub conflict_strategy: ConflictResolution,
+    pub conflict_strategy: ConflictStrategy,
 }
 
 impl Default for SyncEngineConfig {
     fn default() -> Self {
         Self {
             auto_sync: true,
-            conflict_strategy: ConflictResolution::NewerWins,
+            conflict_strategy: ConflictStrategy::NewerWins,
         }
     }
 }
@@ -85,7 +92,6 @@ pub struct SyncEngine {
     config: SyncEngineConfig,
     indexer: Arc<AsyncIndexer>,
     store: Arc<ContentStore>,
-    differ: Arc<DiffEngine>,
     synced_folders: Arc<RwLock<Vec<PathBuf>>>,
     active_peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
     message_rx: mpsc::Receiver<SyncMessage>,
@@ -104,13 +110,10 @@ impl SyncEngine {
     ) -> Result<(Self, mpsc::Sender<SyncMessage>), Box<dyn std::error::Error + Send + Sync>> {
         let (message_tx, message_rx) = mpsc::channel(100);
         
-        let differ = Arc::new(DiffEngine::new(config.conflict_strategy));
-        
         let engine = Self {
             config,
             indexer,
             store,
-            differ,
             synced_folders: Arc::new(RwLock::new(Vec::new())),
             active_peers: Arc::new(RwLock::new(HashMap::new())),
             message_rx,
@@ -218,21 +221,42 @@ impl SyncEngine {
         let remote_manifest = self.get_remote_manifest_simple(peer_id, path).await?;
         info!("Remote manifest has {} files", remote_manifest.files.len());
         
-        // Compute simple diff
-        let diff = self.differ.compute_diff(&local_manifest, &remote_manifest)?;
+        // Compute simple diff (v1.0 - basic implementation)
+        let mut files_to_upload = Vec::new();
+        let mut files_to_download = Vec::new();
+        
+        // Create sets of paths for easy comparison
+        let local_paths: std::collections::HashSet<_> = 
+            local_manifest.files.iter().map(|f| f.path.clone()).collect();
+        let remote_paths: std::collections::HashSet<_> = 
+            remote_manifest.files.iter().map(|f| f.path.clone()).collect();
+        
+        // Simple diff: files in local but not remote should be uploaded
+        for entry in &local_manifest.files {
+            if !remote_paths.contains(&entry.path) {
+                files_to_upload.push(entry.path.clone());
+            }
+        }
+        
+        // Files in remote but not local should be downloaded
+        for entry in &remote_manifest.files {
+            if !local_paths.contains(&entry.path) {
+                files_to_download.push(entry.path.clone());
+            }
+        }
+        
         info!(
-            "Sync plan: {} to upload, {} to download, {} conflicts",
-            diff.files_to_upload.len(),
-            diff.files_to_download.len(),
-            diff.conflicts.len()
+            "Sync plan: {} to upload, {} to download",
+            files_to_upload.len(),
+            files_to_download.len()
         );
         
         // Process uploads
-        for path in &diff.files_to_upload {
+        for path in &files_to_upload {
             if let Some(entry) = local_manifest.files.iter().find(|f| &f.path == path) {
                 let job = TransferJob {
-                    id: format!("upload-{}", path.display()),
-                    source_path: path.clone(),
+                    id: format!("upload-{}", path),
+                    source_path: PathBuf::from(path),
                     peer_id: peer_id.to_string(),
                     direction: TransferDirection::Upload,
                     size: entry.size,
@@ -244,11 +268,11 @@ impl SyncEngine {
         }
         
         // Process downloads
-        for path in &diff.files_to_download {
+        for path in &files_to_download {
             if let Some(entry) = remote_manifest.files.iter().find(|f| &f.path == path) {
                 let job = TransferJob {
-                    id: format!("download-{}", path.display()),
-                    source_path: path.clone(),
+                    id: format!("download-{}", path),
+                    source_path: PathBuf::from(path),
                     peer_id: peer_id.to_string(),
                     direction: TransferDirection::Download,
                     size: entry.size,
@@ -260,10 +284,7 @@ impl SyncEngine {
         }
         
         // Handle conflicts with simple strategy
-        for conflict in &diff.conflicts {
-            warn!("Conflict for {}: using {:?} strategy", 
-                conflict.path.display(), self.config.conflict_strategy);
-        }
+        // v1.0: Conflicts not handled - would need to compare hashes
         
         // Update sync time
         let mut last_sync = self.last_sync_time.write().await;

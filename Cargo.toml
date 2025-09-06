@@ -42,7 +42,7 @@ members = [
     "landro-cas",
     "landro-index",
     "landro-daemon",
-    "landro-cli", "landro-sync",
+    "landro-cli",
 ]
 resolver = "2"
 

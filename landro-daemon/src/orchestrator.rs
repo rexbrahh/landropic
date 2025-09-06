@@ -10,6 +10,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{interval, timeout};
 use tracing::{debug, error, info, warn};
+use quinn::Connection;
 
 use crate::discovery::PeerInfo;
 use crate::watcher::{FileEvent, FileEventKind};
@@ -146,9 +147,14 @@ impl SyncOrchestrator {
             .receive_window(2 * 1024 * 1024 * 1024);   // 2GB for bulk transfers
         
         // Create and start QUIC server
+        // For v1.0, create simple identity and verifier
+        use landro_crypto::{DeviceIdentity, CertificateVerifier};
+        let identity = Arc::new(DeviceIdentity::generate(whoami::devicename())?);
+        let verifier = Arc::new(CertificateVerifier::new(Vec::new()));
+        
         let mut quic_server = QuicServer::new(
-            self.device_identity.clone(),
-            self.certificate_verifier.clone(),
+            identity,
+            verifier,
             quic_config.clone(),
         );
         quic_server.start().await?;
@@ -254,7 +260,9 @@ impl SyncOrchestrator {
         recv.read_exact(&mut chunk_hash).await?;
         
         // Retrieve chunk from store
-        let hash = Hash::from_bytes(&chunk_hash)?;
+        let hash_array: [u8; 32] = chunk_hash.clone().try_into()
+            .map_err(|_| "Invalid hash length")?;
+        let hash = landro_chunker::ContentHash::from_bytes(hash_array);
         let chunk_data = store.read(&hash).await?;
         
         // Send chunk data
@@ -752,8 +760,6 @@ impl SyncOrchestrator {
         for folder in &self.synced_folders {
             info!("Would sync folder: {}", folder.display());
         }
-        
-        control_stream.finish()?;
         
         Ok(())
     }

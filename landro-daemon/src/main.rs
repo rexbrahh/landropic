@@ -16,8 +16,8 @@ use landro_daemon::{
 };
 use landro_index::async_indexer::AsyncIndexer;
 use landro_quic::{QuicConfig, QuicServer};
-use landro_sync::protocol::SyncSession;
-use landro_sync::state::AsyncSyncDatabase;
+// use landro_sync::protocol::SyncSession;  // Not needed for v1.0
+// use landro_sync::state::AsyncSyncDatabase;  // Not needed for v1.0
 use landro_quic::Connection;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
