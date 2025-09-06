@@ -41,7 +41,7 @@ pub struct DiscoveryService {
     running: Arc<RwLock<bool>>,
     service_port: u16,
     capabilities: Vec<String>,
-    event_receiver: Arc<Mutex<Option<mpsc::Receiver<ServiceEvent>>>>,
+    event_receiver: Arc<Mutex<Option<mdns_sd::Receiver<ServiceEvent>>>>,
     background_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
@@ -147,15 +147,14 @@ impl DiscoveryService {
                 }
             };
 
-            while let Ok(event) = receiver.recv().await {
+            while let Some(event) = receiver.recv_async().await.ok() {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
                         // Skip our own service
-                        if let Some(props) = info.get_properties() {
-                            if let Some(discovered_id) = props.get("device_id") {
-                                if discovered_id == &device_id {
-                                    continue;
-                                }
+                        let props = info.get_properties();
+                        if let Some(discovered_id) = props.get_property_val_str("device_id") {
+                            if discovered_id == device_id {
+                                continue;
                             }
                         }
 
@@ -287,14 +286,14 @@ impl DiscoveryService {
 
 /// Parse service info into PeerInfo
 fn parse_service_info(info: &ServiceInfo) -> Option<PeerInfo> {
-    let properties = info.get_properties()?;
+    let properties = info.get_properties();
     
-    let device_id = properties.get("device_id")?.to_string();
-    let device_name = properties.get("device_name")?.to_string();
-    let version = properties.get("version").unwrap_or(&"unknown".to_string()).to_string();
+    let device_id = properties.get_property_val_str("device_id")?.to_string();
+    let device_name = properties.get_property_val_str("device_name")?.to_string();
+    let version = properties.get_property_val_str("version").unwrap_or("unknown").to_string();
     
     let capabilities = properties
-        .get("capabilities")
+        .get_property_str("capabilities")
         .map(|c| c.split(',').map(|s| s.to_string()).collect())
         .unwrap_or_default();
 

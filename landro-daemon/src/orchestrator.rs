@@ -153,7 +153,7 @@ impl SyncOrchestrator {
         chunker: Arc<Chunker>,
         indexer: Arc<AsyncIndexer>,
         storage_path: &PathBuf,
-    ) -> Result<(Self, mpsc::Sender<OrchestratorMessage>), Box<dyn std::error::Error>> {
+    ) -> Result<(Self, mpsc::Sender<OrchestratorMessage>), Box<dyn std::error::Error + Send + Sync>> {
         let (sender, receiver) = mpsc::channel(1000);
         
         // Callbacks will be set after creation
@@ -180,7 +180,7 @@ impl SyncOrchestrator {
     }
     
     /// Run the orchestrator event loop
-    pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Starting sync orchestrator actor");
         
         let mut debounce_interval = interval(self.config.debounce_duration);
@@ -279,7 +279,7 @@ impl SyncOrchestrator {
     }
     
     /// Process debounced file changes
-    async fn process_debounced_changes(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn process_debounced_changes(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.debounce_buffer.is_empty() {
             return Ok(());
         }
@@ -333,7 +333,7 @@ impl SyncOrchestrator {
     }
     
     /// Process a batch of files for a specific operation
-    async fn process_file_batch(&mut self, paths: &[PathBuf], operation: FileOperation) -> Result<(), Box<dyn std::error::Error>> {
+    async fn process_file_batch(&mut self, paths: &[PathBuf], operation: FileOperation) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Spawn concurrent tasks for processing
         let mut tasks = Vec::new();
         
@@ -383,7 +383,7 @@ impl SyncOrchestrator {
     }
     
     /// Handle peer discovered
-    async fn handle_peer_discovered(&mut self, peer: PeerInfo) -> Result<(), Box<dyn std::error::Error>> {
+    async fn handle_peer_discovered(&mut self, peer: PeerInfo) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.active_peers.insert(peer.device_id.clone(), peer.clone());
         
         info!("Peer discovered: {} - preparing sync folders", peer.device_name);
@@ -399,7 +399,7 @@ impl SyncOrchestrator {
     }
     
     /// Handle peer lost
-    async fn handle_peer_lost(&mut self, peer_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn handle_peer_lost(&mut self, peer_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.active_peers.remove(peer_id);
         
         info!("Peer lost: {} - cleaning up state", peer_id);
@@ -415,7 +415,7 @@ impl SyncOrchestrator {
     }
     
     /// Handle explicit sync request
-    async fn handle_sync_request(&mut self, peer_id: &str, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    async fn handle_sync_request(&mut self, peer_id: &str, path: &PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if !self.active_peers.contains_key(peer_id) {
             warn!("Sync requested with unknown peer: {}", peer_id);
             return Ok(());
@@ -435,7 +435,7 @@ impl SyncOrchestrator {
     }
     
     /// Trigger auto-sync with all connected peers
-    async fn trigger_auto_sync(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn trigger_auto_sync(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         debug!("Triggering auto-sync with {} peers", self.active_peers.len());
         
         // Notify about sync needed for each peer
@@ -449,7 +449,7 @@ impl SyncOrchestrator {
     }
     
     /// Retry failed operations
-    async fn retry_failed_operations(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn retry_failed_operations(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.pending_operations.is_empty() {
             return Ok(());
         }
@@ -487,7 +487,7 @@ impl SyncOrchestrator {
     }
     
     /// Process a folder for synchronization
-    async fn process_folder_for_sync(&mut self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    async fn process_folder_for_sync(&mut self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Processing folder for sync: {}", path.display());
         
         // Index the folder to build manifest
@@ -528,7 +528,7 @@ impl SyncOrchestrator {
         &mut self,
         path: &PathBuf,
         operation: FileOperation,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match operation {
             FileOperation::Create | FileOperation::Modify => {
                 if path.is_file() {
@@ -554,16 +554,18 @@ impl SyncOrchestrator {
                         // Store chunks in CAS
                         let mut stored_hashes = Vec::new();
                         for chunk in &chunks {
-                            let hash = self.store.put(&chunk.data).await?;
-                            stored_hashes.push(hash);
+                            let obj_ref = self.store.write(&chunk.data).await?;
+                            stored_hashes.push(obj_ref.hash);
                         }
                         
                         // Track bytes synced
                         self.total_bytes_synced += file_size;
                     }
                     
-                    // Update index
-                    self.indexer.index_file(path).await?;
+                    // Update index - index parent folder to include this file
+                    if let Some(parent) = path.parent() {
+                        self.indexer.index_folder(parent).await?;
+                    }
                     
                     // Remove from current operations
                     self.current_operations.retain(|op| !op.contains(&path.display().to_string()));
@@ -580,7 +582,7 @@ impl SyncOrchestrator {
     }
     
     /// Process large files with streaming
-    async fn process_large_file(&mut self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    async fn process_large_file(&mut self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use tokio::io::AsyncReadExt;
         
         info!("Processing large file with streaming: {}", path.display());
@@ -602,7 +604,7 @@ impl SyncOrchestrator {
             
             // Store chunks
             for chunk in chunks {
-                self.store.put(&chunk.data).await?;
+                self.store.write(&chunk.data).await?;
                 total_chunks += 1;
             }
         }
@@ -612,7 +614,7 @@ impl SyncOrchestrator {
     }
     
     /// Add a folder to sync
-    async fn add_sync_folder(&mut self, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    async fn add_sync_folder(&mut self, path: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if !path.exists() {
             return Err(format!("Path does not exist: {}", path.display()).into());
         }
@@ -635,7 +637,7 @@ impl SyncOrchestrator {
     }
     
     /// Remove a folder from sync
-    async fn remove_sync_folder(&mut self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    async fn remove_sync_folder(&mut self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.synced_folders.retain(|p| p != path);
         Ok(())
     }
@@ -653,7 +655,7 @@ impl SyncOrchestrator {
     }
     
     /// Graceful shutdown
-    async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Orchestrator shutting down gracefully");
         
         // Process any remaining debounced changes
@@ -685,7 +687,7 @@ async fn process_single_file(
     store: Arc<ContentStore>,
     chunker: Arc<Chunker>,
     indexer: Arc<AsyncIndexer>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match operation {
         FileOperation::Create | FileOperation::Modify => {
             // Check if it's a file or directory
@@ -701,12 +703,14 @@ async fn process_single_file(
                 
                 // Store chunks in CAS
                 for chunk in &chunks {
-                    let hash = store.put(&chunk.data).await?;
-                    debug!("Stored chunk with hash: {}", hex::encode(&hash.0));
+                    let obj_ref = store.write(&chunk.data).await?;
+                    debug!("Stored chunk with hash: {}", hex::encode(&obj_ref.hash.0));
                 }
                 
-                // Update index
-                indexer.index_file(&path).await?;
+                // Update index - index parent folder to include this file
+                if let Some(parent) = path.parent() {
+                    indexer.index_folder(parent).await?;
+                }
                 info!("Indexed file: {}", path.display());
             } else if path.is_dir() {
                 // Index the entire directory
@@ -736,7 +740,7 @@ mod tests {
         let storage_path = temp_dir.path().to_path_buf();
         
         // Create test components
-        let store = Arc::new(ContentStore::open(&storage_path.join("cas")).await.unwrap());
+        let store = Arc::new(ContentStore::new(&storage_path.join("cas")).await.unwrap());
         let chunker_config = landro_chunker::ChunkerConfig {
             min_size: 16 * 1024,
             avg_size: 64 * 1024,
@@ -777,7 +781,7 @@ mod tests {
         let storage_path = temp_dir.path().to_path_buf();
         
         // Create test components
-        let store = Arc::new(ContentStore::open(&storage_path.join("cas")).await.unwrap());
+        let store = Arc::new(ContentStore::new(&storage_path.join("cas")).await.unwrap());
         let chunker_config = landro_chunker::ChunkerConfig {
             min_size: 16 * 1024,
             avg_size: 64 * 1024,

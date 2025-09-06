@@ -535,13 +535,13 @@ async fn test_concurrent_operations() {
             
             if let Err(e) = fs::write(&file_path, content.as_bytes()).await {
                 error!("Failed to write concurrent file {}: {}", i, e);
-                return Err(e.into());
+                return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
             }
             
             // Index the file individually (simulating real-time indexing)
             if let Err(e) = node_storage.index_folder(&sync_dir).await {
                 error!("Failed to index concurrent file {}: {}", i, e);
-                return Err(e.into());
+                return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
             }
             
             Ok(())
@@ -590,12 +590,16 @@ async fn test_data_integrity() {
     node.start().await.expect("Failed to start node");
     
     // Create files with known checksums
+    let large_data = vec![0xFFu8; 64 * 1024]; // 64KB of 0xFF
+    let binary_data: Vec<u8> = (0..256).collect(); // Binary data
+    let medium_data = [0u8; 1024]; // 1KB of zeros
+    
     let test_cases = vec![
         ("empty.txt", b"".as_slice()),
-        ("small.txt", b"hello"),
-        ("medium.txt", &[0u8; 1024]), // 1KB of zeros
-        ("large.txt", &vec![0xFFu8; 64 * 1024]), // 64KB of 0xFF
-        ("binary.txt", &(0..256).collect::<Vec<u8>>()), // Binary data
+        ("small.txt", b"hello".as_slice()),
+        ("medium.txt", medium_data.as_slice()),
+        ("large.txt", large_data.as_slice()),
+        ("binary.txt", binary_data.as_slice()),
     ];
     
     let mut original_hashes = HashMap::new();

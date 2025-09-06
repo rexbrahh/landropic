@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize core components
     info!("Initializing content store at {:?}", cas_path);
-    let store = Arc::new(ContentStore::open(&cas_path).await?);
+    let store = Arc::new(ContentStore::new(&cas_path).await?);
     
     info!("Initializing chunker");
     let chunker_config = ChunkerConfig {
