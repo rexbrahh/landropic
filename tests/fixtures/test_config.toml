@@ -1,0 +1,45 @@
+# Test configuration for Landropic integration tests
+
+[daemon]
+# Test daemon configuration
+default_port = 9876
+storage_path = "/tmp/landropic-test"
+device_name = "test-device"
+auto_sync = false
+max_concurrent_transfers = 2
+verbose_logging = true
+
+[network]
+# Network test configuration
+quic_idle_timeout = "10s"
+quic_keep_alive = "30s"
+max_concurrent_streams = 100
+max_datagram_size = 1200
+connection_timeout = "5s"
+
+[sync]
+# Sync engine test configuration
+chunk_min_size = 1024       # 1KB
+chunk_avg_size = 4096       # 4KB  
+chunk_max_size = 16384      # 16KB
+sync_interval = "5s"
+conflict_resolution = "manual"
+
+[testing]
+# Integration test specific settings
+test_timeout = "30s"
+cleanup_temp_dirs = true
+log_level = "debug"
+parallel_test_count = 4
+
+[discovery]
+# Service discovery test settings
+mdns_timeout = "5s"
+discovery_interval = "10s"
+service_type = "_landropic._tcp"
+
+[storage]
+# Storage layer test settings
+cas_cache_size = "100MB"
+db_pool_size = 5
+vacuum_interval = "1h"

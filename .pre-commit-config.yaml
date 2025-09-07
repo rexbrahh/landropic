@@ -1,0 +1,133 @@
+# Pre-commit hooks configuration for Landropic
+# Senior Engineer Build Validation Infrastructure
+#
+# These hooks prevent broken builds from being committed to the repository
+# Install with: pre-commit install
+
+repos:
+  # Rust-specific hooks
+  - repo: local
+    hooks:
+      # Format check
+      - id: cargo-fmt
+        name: Cargo Format Check
+        entry: cargo fmt --all -- --check
+        language: system
+        files: \.rs$
+        pass_filenames: false
+        
+      # Clippy linting
+      - id: cargo-clippy
+        name: Cargo Clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        files: \.rs$
+        pass_filenames: false
+        
+      # Quick build check for modified crates
+      - id: cargo-check
+        name: Cargo Check
+        entry: cargo check --workspace
+        language: system
+        files: \.rs$
+        pass_filenames: false
+        
+      # Unit test check (quick tests only)
+      - id: cargo-test-quick
+        name: Cargo Test (Quick)
+        entry: cargo test --workspace --lib --bins --profile test-fast
+        language: system
+        files: \.rs$
+        pass_filenames: false
+        stages: [pre-push]  # Only run on pre-push to avoid slowing down commits
+
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      # Basic file checks
+      - id: check-yaml
+        name: Check YAML files
+        exclude: ^\.github/workflows/.*\.yml$  # Skip workflow files that might have special syntax
+        
+      - id: check-toml
+        name: Check TOML files
+        
+      - id: check-json
+        name: Check JSON files
+        
+      - id: end-of-file-fixer
+        name: Fix end of files
+        exclude: \.rs$  # Skip Rust files to avoid conflicts with rustfmt
+        
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        exclude: \.rs$  # Skip Rust files to avoid conflicts with rustfmt
+        
+      # Security checks
+      - id: check-private-key
+        name: Check for private keys
+        
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+        
+      - id: check-case-conflict
+        name: Check for case conflicts
+        
+      # Size limits
+      - id: check-added-large-files
+        name: Check for large files
+        args: ['--maxkb=1000']  # 1MB limit
+
+  # Rust-specific tools via pre-commit hooks
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        name: Rust Format (Auto-fix)
+        args: ['--all']
+        
+      - id: cargo-check
+        name: Rust Cargo Check
+        args: ['--workspace']
+
+  # Security audit (run less frequently)
+  - repo: local
+    hooks:
+      - id: cargo-audit
+        name: Cargo Security Audit
+        entry: cargo audit
+        language: system
+        files: Cargo\.(toml|lock)$
+        pass_filenames: false
+        stages: [pre-push]  # Only run on pre-push
+
+# Global configuration
+default_stages: [commit, merge-commit]
+default_install_hook_types: [pre-commit, pre-push, commit-msg]
+
+# Exclude patterns
+exclude: |
+  (?x)^(
+    \.conductor/.*|
+    target/.*|
+    .*\.lock$|
+    .*\.tmp$
+  )$
+
+# Hook execution settings
+minimum_pre_commit_version: "3.0.0"
+fail_fast: false  # Run all hooks even if one fails
+
+# CI configuration
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: 'main'
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: monthly
+  skip: []
+  submodules: false

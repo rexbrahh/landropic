@@ -46,8 +46,8 @@ pub enum DataMessage {
 /// Stream multiplexer for managing control and data channels
 pub struct StreamMultiplexer {
     connection: Arc<Connection>,
-    control_streams: Arc<RwLock<HashMap<String, (SendStream, RecvStream)>>>,
-    data_streams: Arc<RwLock<HashMap<String, (SendStream, RecvStream)>>>,
+    control_streams: Arc<RwLock<HashMap<String, Arc<Mutex<SendStream>>>>>,
+    data_streams: Arc<RwLock<HashMap<String, Arc<Mutex<SendStream>>>>>,
     message_handlers: Arc<RwLock<HashMap<StreamType, mpsc::Sender<MultiplexMessage>>>>,
     health_monitor: Arc<HealthMonitor>,
     config: MultiplexConfig,
@@ -135,15 +135,18 @@ impl StreamMultiplexer {
     async fn create_control_stream(&self, stream_id: &str) -> Result<()> {
         debug!("Creating control stream: {}", stream_id);
         
-        let (send_stream, recv_stream) = self.connection.open_bi().await
+        let (send_stream, _recv_stream) = self.connection.open_bi().await
             .map_err(|e| QuicError::Stream(format!("Failed to open control stream: {}", e)))?;
         
         // Send stream type identifier
         let mut send_stream = send_stream;
         self.send_stream_type_header(&mut send_stream, StreamType::Control).await?;
         
+        // Wrap in Arc<Mutex> for safe concurrent access
+        let send_stream = Arc::new(Mutex::new(send_stream));
+        
         let mut control_streams = self.control_streams.write().await;
-        control_streams.insert(stream_id.to_string(), (send_stream, recv_stream));
+        control_streams.insert(stream_id.to_string(), send_stream);
         
         // Initialize health stats
         self.health_monitor.init_stream_stats(stream_id).await;
@@ -156,15 +159,18 @@ impl StreamMultiplexer {
     pub async fn create_data_stream(&self, stream_id: &str) -> Result<()> {
         debug!("Creating data stream: {}", stream_id);
         
-        let (send_stream, recv_stream) = self.connection.open_bi().await
+        let (send_stream, _recv_stream) = self.connection.open_bi().await
             .map_err(|e| QuicError::Stream(format!("Failed to open data stream: {}", e)))?;
         
         // Send stream type identifier
         let mut send_stream = send_stream;
         self.send_stream_type_header(&mut send_stream, StreamType::Data).await?;
         
+        // Wrap in Arc<Mutex> for safe concurrent access
+        let send_stream = Arc::new(Mutex::new(send_stream));
+        
         let mut data_streams = self.data_streams.write().await;
-        data_streams.insert(stream_id.to_string(), (send_stream, recv_stream));
+        data_streams.insert(stream_id.to_string(), send_stream);
         
         // Initialize health stats
         self.health_monitor.init_stream_stats(stream_id).await;
@@ -175,9 +181,18 @@ impl StreamMultiplexer {
 
     /// Send a control message
     pub async fn send_control_message(&self, message: ControlMessage) -> Result<()> {
-        // For now, return success without actually sending
-        // TODO: Implement proper stream multiplexing with Arc<Mutex<SendStream>>
-        debug!("Control message queued: {:?}", message);
+        // Ensure primary control stream exists
+        self.ensure_control_stream().await?;
+        
+        let control_streams = self.control_streams.read().await;
+        let send_stream = control_streams.get("primary")
+            .ok_or_else(|| QuicError::Stream("Primary control stream not found".to_string()))?;
+        
+        let multiplex_message = MultiplexMessage::Control(message);
+        let mut stream_guard = send_stream.lock().await;
+        self.send_message(&mut stream_guard, &multiplex_message, "primary").await?;
+        
+        debug!("Control message sent successfully");
         Ok(())
     }
 
@@ -189,13 +204,14 @@ impl StreamMultiplexer {
         }
         
         let data_streams = self.data_streams.read().await;
-        let (send_stream, _) = data_streams.get(stream_id)
+        let send_stream = data_streams.get(stream_id)
             .ok_or_else(|| QuicError::Stream(format!("Data stream '{}' not found", stream_id)))?;
         
-        // For now, return success without actually sending
-        // TODO: Implement proper stream multiplexing with Arc<Mutex<SendStream>>
-        debug!("Data message queued for stream '{}': {:?}", stream_id, message);
+        let multiplex_message = MultiplexMessage::Data(message);
+        let mut stream_guard = send_stream.lock().await;
+        self.send_message(&mut stream_guard, &multiplex_message, stream_id).await?;
         
+        debug!("Data message sent successfully on stream '{}'", stream_id);
         Ok(())
     }
 
@@ -242,6 +258,24 @@ impl StreamMultiplexer {
         Ok(())
     }
 
+    /// Send heartbeat message (static helper to avoid self capture in tokio::spawn)
+    async fn send_heartbeat_message(send_stream: &mut SendStream, message: &MultiplexMessage, stream_id: &str) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        
+        // Serialize message (simplified heartbeat)
+        let message_data = b"heartbeat".to_vec();
+        
+        // Send message length followed by data
+        let length_bytes = (message_data.len() as u32).to_be_bytes();
+        
+        send_stream.write_all(&length_bytes).await
+            .map_err(|e| QuicError::Stream(format!("Failed to send heartbeat length: {}", e)))?;
+        send_stream.write_all(&message_data).await
+            .map_err(|e| QuicError::Stream(format!("Failed to send heartbeat data: {}", e)))?;
+        
+        Ok(())
+    }
+
     /// Start health monitoring background task
     async fn start_health_monitor(&self) {
         let health_monitor = self.health_monitor.clone();
@@ -256,9 +290,19 @@ impl StreamMultiplexer {
                 
                 // Send heartbeats on control streams
                 let streams = control_streams.read().await;
-                // Skip heartbeats for now - requires mutable reference to streams
-                // TODO: Implement proper heartbeat mechanism with Arc<Mutex<SendStream>>
-                debug!("Skipping heartbeats - not implemented for immutable stream references");
+                for (stream_id, send_stream) in streams.iter() {
+                    if let Ok(mut stream_guard) = send_stream.try_lock() {
+                        let heartbeat_msg = MultiplexMessage::Heartbeat;
+                        // Use a helper method to send heartbeat without capturing self
+                        if let Err(e) = Self::send_heartbeat_message(&mut stream_guard, &heartbeat_msg, stream_id).await {
+                            debug!("Failed to send heartbeat on stream '{}': {}", stream_id, e);
+                        } else {
+                            debug!("Heartbeat sent on stream '{}'", stream_id);
+                        }
+                    } else {
+                        debug!("Stream '{}' is busy, skipping heartbeat", stream_id);
+                    }
+                }
                 
                 // Update health stats
                 health_monitor.update_heartbeats().await;

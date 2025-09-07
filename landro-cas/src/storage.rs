@@ -305,7 +305,7 @@ impl std::fmt::Debug for ContentStore {
 
 /// Runtime statistics for the content store
 #[derive(Debug)]
-struct ContentStoreRuntimeStats {
+pub struct ContentStoreRuntimeStats {
     writes: AtomicU64,
     reads: AtomicU64,
     bytes_written: AtomicU64,

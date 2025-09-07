@@ -149,7 +149,7 @@ async fn test_multiple_resumable_writes() {
 
     // Write data to each
     for (partial, i) in &mut partials {
-        let data = vec![i as u8; 1024];
+        let data = vec![*i as u8; 1024];
         let cursor = Cursor::new(data);
         store.continue_resumable_write(partial, cursor).await.unwrap();
     }
