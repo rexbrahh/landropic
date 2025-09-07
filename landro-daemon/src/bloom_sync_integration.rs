@@ -60,7 +60,7 @@ pub struct BandwidthSavings {
 /// Day 2 Enhanced Sync Engine with Bloom Diff Integration
 pub struct BloomSyncEngine {
     diff_handler: Arc<DiffProtocolHandler>,
-    quic_transport: Arc<QuicSyncTransport>,
+    quic_transport: Arc<DummyQuicSyncTransport>,
     diff_computer: Arc<DiffComputer>,
     cas: Arc<ContentStore>,
     indexer: Arc<AsyncIndexer>,
@@ -90,13 +90,14 @@ impl BloomSyncEngine {
         let chunk_cache = Arc::new(std::collections::HashSet::new());
         let diff_computer = Arc::new(DiffComputer::new(chunk_cache));
         
+        // Create a dummy QuicSyncTransport for now - will be replaced when actual connections are made
+        let quic_transport = Arc::new(DummyQuicSyncTransport {
+            cas: cas.clone(),
+        });
+        
         Ok(Self {
             diff_handler,
-            quic_transport: {
-                // TODO: Create proper connection from daemon's client
-                // For now, defer QUIC transport creation until we have a real connection
-                todo!("QuicSyncTransport needs actual connection from daemon client")
-            },
+            quic_transport,
             diff_computer,
             cas,
             indexer,
@@ -146,7 +147,7 @@ impl BloomSyncEngine {
         
         self.active_syncs.write().await.insert(session_id.clone(), session);
         
-        // Create QUIC transport for this session
+        // Create QUIC transport for this session - for alpha, use the real implementation
         let transport = QuicSyncTransport::new(connection, self.cas.clone()).await?;
         let quic_session_id = transport.start_sync(
             &folder_path.to_string_lossy(),
@@ -497,6 +498,25 @@ struct TransferResult {
     transfer_duration: Duration,
     throughput: u64,
     errors: Vec<String>,
+}
+
+/// Dummy QuicSyncTransport implementation to prevent panic during initialization
+/// This is a minimal stub that implements the QuicSyncTransport interface
+/// without requiring an actual QUIC connection.
+pub struct DummyQuicSyncTransport {
+    cas: Arc<ContentStore>,
+}
+
+impl DummyQuicSyncTransport {
+    pub async fn start_sync(
+        &self,
+        _folder_path: &str,
+        _act_as_initiator: bool,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // Return a dummy session ID for now
+        Ok(format!("dummy_session_{}", 
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_millis()))
+    }
 }
 
 // TransferStats is already imported from landro_sync above

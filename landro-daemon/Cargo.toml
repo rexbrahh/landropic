@@ -42,10 +42,15 @@ rustls = { version = "0.23", features = ["aws_lc_rs"], default-features = false 
 siphasher = "1.0"
 blake3 = "1.5"
 anyhow = "1.0"
+clap = { version = "4.0", features = ["derive"] }
 
 [[bin]]
 name = "landro-daemon"
 path = "src/main.rs"
+
+[[bin]]
+name = "file-transfer"
+path = "src/bin/file_transfer.rs"
 
 [dev-dependencies]
 tempfile = { workspace = true }

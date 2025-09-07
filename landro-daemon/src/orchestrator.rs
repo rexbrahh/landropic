@@ -383,10 +383,17 @@ impl SyncOrchestrator {
                             let chunker_clone = chunker.clone();
                             
                             tokio::spawn(async move {
-                                // Simplified v1.0 - direct connection handling
-                                info!("Accepting connection from peer");
-                                // TODO: Implement actual stream handling when needed
-                                let _ = (store_clone, indexer_clone, chunker_clone); // Suppress unused warnings
+                                // Use the handle_quic_connection function from main.rs
+                                info!("Accepting connection from peer, handling with SimpleSyncMessage protocol");
+                                if let Err(e) = crate::connection_handler::handle_quic_connection(
+                                    connection, 
+                                    store_clone, 
+                                    indexer_clone,
+                                    // Create a dummy channel since we don't use QuicMessage in alpha
+                                    tokio::sync::mpsc::channel(1).0
+                                ).await {
+                                    error!("Error handling QUIC connection: {}", e);
+                                }
                             });
                         }
                         Err(e) => {

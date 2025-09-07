@@ -1,0 +1,16 @@
+{
+  "timestamp": "2025-09-06T23:36:30-04:00",
+  "phase": "build_validation",
+  "severity": "critical",
+  "alpha_blocker": true,
+  "description": "Missing expected binaries",
+  "reproduction_steps": ["Run cargo build --release", "Check target/release/ directory"],
+  "expected_behavior": "landro-daemon and landro binaries present",
+  "actual_behavior": "One or more binaries missing",
+  "environment": {
+    "os": "Darwin",
+    "arch": "arm64",
+    "rust_version": "rustc 1.89.0 (29483883e 2025-08-04)",
+    "git_commit": "6a93619515aed111381e84bc45c71caa396adc03"
+  }
+}

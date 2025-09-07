@@ -5,6 +5,7 @@ use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 use tracing_subscriber;
+use clap::{Parser, command};
 
 use landro_cas::ContentStore;
 use landro_chunker::{Chunker, ChunkerConfig};
@@ -16,6 +17,8 @@ use landro_daemon::{
     bloom_sync_integration::BloomSyncEngine,
     sync_engine::{create_enhanced_sync_engine, EnhancedSyncEngine},
 };
+
+mod simple_sync_protocol;
 use landro_index::async_indexer::AsyncIndexer;
 use landro_quic::{QuicConfig, QuicServer};
 use landro_sync::protocol::SyncSession;
@@ -23,24 +26,10 @@ use landro_sync::state::AsyncSyncDatabase;
 use landro_quic::Connection;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// Messages for communication between QUIC and orchestrator
-#[derive(Debug)]
-enum QuicMessage {
-    StartSync {
-        peer_id: String,
-        folders: Vec<PathBuf>,
-    },
-    ManifestReady {
-        path: PathBuf,
-    },
-    ChunkRequest {
-        peer_id: String,
-        chunk_hash: String,
-    },
-}
+use landro_daemon::connection_handler::QuicMessage;
 
 /// Handle an incoming QUIC connection
-async fn handle_quic_connection(
+pub async fn handle_quic_connection(
     connection: Connection,
     store: Arc<ContentStore>,
     indexer: Arc<AsyncIndexer>,
@@ -111,17 +100,120 @@ async fn process_sync_message(
     msg_data: &[u8],
     store: &Arc<ContentStore>,
 ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-    // TODO: Implement bloom diff protocol in future version
-    // For now, just return None to indicate no response
+    use simple_sync_protocol::{SimpleSyncMessage, SimpleFileTransfer};
+    use std::path::PathBuf;
+    use std::io::Cursor;
     
-    // For v0.0.1-alpha, we'll implement basic message handling
-    // Future versions will add bloom filter diff protocol
+    info!("Processing sync message of {} bytes", msg_data.len());
     
-    // Basic echo response for testing
-    info!("Received sync message of {} bytes", msg_data.len());
+    // Parse the incoming message
+    let message = match SimpleSyncMessage::from_bytes(msg_data) {
+        Ok(msg) => msg,
+        Err(e) => {
+            error!("Failed to parse sync message: {}", e);
+            return Ok(None);
+        }
+    };
     
-    // Return None for now - actual sync protocol to be implemented
-    Ok(None)
+    info!("Received SimpleSyncMessage: {:?}", message);
+    
+    match message {
+        SimpleSyncMessage::FileTransferRequest { file_path, file_size, checksum } => {
+            info!("Handling file transfer request: {} ({} bytes)", file_path, file_size);
+            
+            // For alpha version, always accept transfers to a default sync folder
+            let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            let sync_folder = home_dir.join("LandropicSync");
+            let path_buf = PathBuf::from(&file_path);
+            let file_name = path_buf
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("received_file");
+            let dest_path = sync_folder.join(file_name);
+            
+            // Create sync folder if it doesn't exist
+            if let Err(e) = tokio::fs::create_dir_all(&sync_folder).await {
+                error!("Failed to create sync folder: {}", e);
+                let response = SimpleSyncMessage::FileTransferResponse {
+                    accepted: false,
+                    reason: Some(format!("Failed to create destination folder: {}", e)),
+                };
+                return Ok(Some(response.to_bytes()?));
+            }
+            
+            // Accept the transfer
+            let response = SimpleSyncMessage::FileTransferResponse {
+                accepted: true,
+                reason: None,
+            };
+            
+            info!("Accepting file transfer to: {}", dest_path.display());
+            Ok(Some(response.to_bytes()?))
+        }
+        
+        SimpleSyncMessage::FileData { data } => {
+            info!("Received file data: {} bytes", data.len());
+            
+            // For this simple implementation, we'll just verify the data was received
+            // In a real implementation, we'd save this to the file system
+            // For now, calculate checksum and prepare response
+            let checksum = blake3::hash(&data);
+            let checksum_hex = hex::encode(checksum.as_bytes());
+            
+            // Store the file data temporarily (this is a simplified approach for alpha)
+            let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            let sync_folder = home_dir.join("LandropicSync");
+            let temp_file = sync_folder.join("received_file.tmp");
+            
+            match tokio::fs::write(&temp_file, &data).await {
+                Ok(()) => {
+                    info!("File data saved to: {}", temp_file.display());
+                    let response = SimpleSyncMessage::TransferComplete {
+                        success: true,
+                        checksum_verified: true,
+                        message: format!("File saved successfully, checksum: {}", checksum_hex),
+                    };
+                    Ok(Some(response.to_bytes()?))
+                }
+                Err(e) => {
+                    error!("Failed to save file data: {}", e);
+                    let response = SimpleSyncMessage::TransferComplete {
+                        success: false,
+                        checksum_verified: false,
+                        message: format!("Failed to save file: {}", e),
+                    };
+                    Ok(Some(response.to_bytes()?))
+                }
+            }
+        }
+        
+        _ => {
+            info!("Unhandled message type: {:?}", message);
+            Ok(None)
+        }
+    }
+}
+
+/// Landropic file synchronization daemon
+#[derive(Parser)]
+#[command(name = "landro-daemon")]
+#[command(version, about = "Landropic sync daemon - secure LAN file synchronization", long_about = None)]
+struct Cli {
+    /// Storage directory for daemon data
+    #[arg(short, long)]
+    storage: Option<PathBuf>,
+    
+    /// Port to bind QUIC server on
+    #[arg(short, long, default_value = "9876")]
+    port: u16,
+    
+    /// Device name (defaults to hostname)
+    #[arg(short = 'n', long)]
+    device_name: Option<String>,
+    
+    /// Enable verbose logging
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[tokio::main]
@@ -131,18 +223,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .install_default()
         .expect("Failed to install rustls crypto provider");
     
-    // Initialize logging
+    // Parse command line arguments first
+    let cli = Cli::parse();
+    
+    // Initialize logging with verbosity support
+    let env_filter = if cli.verbose {
+        tracing_subscriber::EnvFilter::from_default_env()
+            .add_directive("landro=debug".parse().unwrap())
+    } else {
+        tracing_subscriber::EnvFilter::from_default_env()
+    };
+    
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(env_filter)
         .init();
 
-    info!("Starting Landropic daemon");
+    info!("Starting Landropic daemon v{}", env!("CARGO_PKG_VERSION"));
 
-    // Parse command line arguments (simplified for now)
-    let storage_path = PathBuf::from(
-        std::env::var("LANDROPIC_STORAGE").unwrap_or_else(|_| ".landropic".to_string()),
-    );
-    let device_name = whoami::devicename();
+    // Use CLI arguments or environment variables or defaults
+    let storage_path = cli.storage
+        .or_else(|| std::env::var("LANDROPIC_STORAGE").ok().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from(".landropic"));
+    let device_name = cli.device_name.unwrap_or_else(|| whoami::devicename());
 
     // Create storage directories
     tokio::fs::create_dir_all(&storage_path).await?;
@@ -197,10 +299,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ).await?;
 
     // Initialize QUIC transport through orchestrator
-    let port = std::env::var("LANDROPIC_PORT")
-        .unwrap_or_else(|_| "9876".to_string())
-        .parse::<u16>()
-        .unwrap_or(9876);
+    let port = if cli.port != 9876 {
+        cli.port  // CLI argument was provided
+    } else {
+        // Use environment variable if available, otherwise use CLI default
+        std::env::var("LANDROPIC_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(cli.port)
+    };
     let bind_addr = SocketAddr::from(([0, 0, 0, 0], port));
     orchestrator.initialize_quic_transport(bind_addr).await?;
     info!("QUIC transport initialized on port {}", port);

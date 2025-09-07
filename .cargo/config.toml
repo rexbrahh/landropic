@@ -1,5 +1,6 @@
 # Build configuration without sccache
 [build]
+# Remove any problematic job settings - let cargo use defaults
 
 # Keep other optimizations
 [target.x86_64-apple-darwin]
