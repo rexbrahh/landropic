@@ -35,6 +35,8 @@ hex = { workspace = true }
 x509-parser = "0.16"
 whoami = "1.4"
 pem = "3.0"
+chrono = { workspace = true }
+subtle = "2.5"
 
 [dev-dependencies]
 tempfile = { workspace = true }

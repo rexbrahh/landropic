@@ -29,9 +29,15 @@ chrono = { workspace = true }
 rustls = { workspace = true }
 prost-types = { workspace = true }
 landro-crypto = { path = "landro-crypto", features = ["dangerous-allow-any"] }
+landro-daemon = { path = "landro-daemon" }
+landro-cli = { path = "landro-cli" }
+landro-sync = { path = "landro-sync" }
 tracing = { workspace = true }
 blake3 = { workspace = true }
 hex = { workspace = true }
+anyhow = { workspace = true }
+walkdir = "2.4"
+libc = "0.2"
 
 [workspace]
 members = [

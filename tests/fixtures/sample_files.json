@@ -1,0 +1,92 @@
+{
+  "description": "Sample file configurations for integration tests",
+  "file_sets": {
+    "basic": [
+      {
+        "name": "README.txt",
+        "content": "# Landropic Test Files\n\nThis is a basic test file for sync testing.\nIt contains simple text content to verify file transfer functionality.\n",
+        "size": 150
+      },
+      {
+        "name": "data.json",
+        "content": "{\"test\": true, \"version\": \"0.1.0\", \"items\": [1, 2, 3, 4, 5]}",
+        "size": 65
+      }
+    ],
+    "complex": [
+      {
+        "name": "documents/project.md",
+        "content": "# Project Documentation\n\n## Overview\nThis is a test project for Landropic sync.\n\n## Features\n- Encrypted file sync\n- Cross-platform support\n- QUIC protocol\n- Content deduplication\n\n## Architecture\n- CLI client\n- Daemon service\n- QUIC transport\n- CAS storage\n",
+        "size": 350
+      },
+      {
+        "name": "src/main.rs",
+        "content": "//! Test Rust source file\n\nfn main() {\n    println!(\"Hello from Landropic test!\");\n    \n    let data = vec![1, 2, 3, 4, 5];\n    for item in data {\n        println!(\"Item: {}\", item);\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it_works() {\n        assert_eq!(2 + 2, 4);\n    }\n}\n",
+        "size": 400
+      },
+      {
+        "name": "media/sample.dat",
+        "content_type": "binary",
+        "size": 2048,
+        "pattern": "repeating_bytes"
+      }
+    ],
+    "large": [
+      {
+        "name": "large_text.txt",
+        "content_type": "generated",
+        "size": 50000,
+        "pattern": "lorem_ipsum"
+      },
+      {
+        "name": "binary_data.bin", 
+        "content_type": "binary",
+        "size": 100000,
+        "pattern": "random"
+      }
+    ],
+    "conflict_test": [
+      {
+        "name": "conflict.txt",
+        "versions": [
+          {
+            "device": "device1",
+            "content": "Version from device 1\nModified at timestamp 1",
+            "timestamp": "2024-01-01T10:00:00Z"
+          },
+          {
+            "device": "device2", 
+            "content": "Version from device 2\nModified at timestamp 2",
+            "timestamp": "2024-01-01T10:01:00Z"
+          }
+        ]
+      }
+    ]
+  },
+  "test_scenarios": {
+    "basic_sync": {
+      "description": "Basic file sync between two devices",
+      "file_set": "basic",
+      "devices": 2,
+      "expected_operations": ["add", "sync", "verify"]
+    },
+    "complex_hierarchy": {
+      "description": "Complex directory structure sync",
+      "file_set": "complex", 
+      "devices": 2,
+      "expected_operations": ["add", "sync", "verify", "modify", "sync", "verify"]
+    },
+    "large_file_sync": {
+      "description": "Large file transfer and chunking",
+      "file_set": "large",
+      "devices": 2,
+      "expected_operations": ["add", "chunk", "sync", "verify"]
+    },
+    "conflict_resolution": {
+      "description": "File conflict detection and resolution",
+      "file_set": "conflict_test",
+      "devices": 2,
+      "expected_operations": ["add", "modify_both", "sync", "detect_conflict", "resolve"]
+    }
+  }
+}

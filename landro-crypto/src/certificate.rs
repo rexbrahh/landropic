@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;
-use tracing::{debug, warn};
+use tracing::{debug, warn, error};
 
 use crate::errors::{CryptoError, Result};
 use crate::identity::{DeviceId, DeviceIdentity};
@@ -493,23 +493,37 @@ impl TlsConfig {
         Ok(config)
     }
 
-    /// Create client TLS configuration for pairing mode (DANGEROUS - accepts any cert)
-    /// This should ONLY be used during initial device pairing
-    pub fn client_config_pairing(
+    /// Create client TLS configuration for secure pairing mode with time limits
+    /// SECURITY: This uses SecurePairingCertVerifier which includes multiple safety mechanisms
+    pub fn client_config_secure_pairing(
         cert_chain: Vec<CertificateDer<'static>>,
         private_key: PrivateKeyDer<'static>,
     ) -> Result<rustls::ClientConfig> {
-        use crate::secure_verifier::DangerousAcceptAnyServerCert;
+        use crate::secure_verifier::SecurePairingCertVerifier;
 
-        warn!("SECURITY WARNING: Creating TLS configuration that accepts ANY certificate - ONLY use for initial device pairing");
+        warn!("SECURITY WARNING: Creating TLS configuration for secure pairing with time-limited window");
 
+        let secure_verifier = SecurePairingCertVerifier::new();
         let config = rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(DangerousAcceptAnyServerCert))
+            .with_custom_certificate_verifier(Arc::new(secure_verifier))
             .with_client_auth_cert(cert_chain, private_key)
             .map_err(|e| CryptoError::CertificateGeneration(e.to_string()))?;
 
         Ok(config)
+    }
+    
+    /// DEPRECATED: Create client TLS configuration for pairing mode (DANGEROUS - accepts any cert)
+    /// This method is deprecated - use client_config_secure_pairing instead
+    #[deprecated(since = "0.2.0", note = "Use client_config_secure_pairing instead")]
+    pub fn client_config_pairing(
+        cert_chain: Vec<CertificateDer<'static>>,
+        private_key: PrivateKeyDer<'static>,
+    ) -> Result<rustls::ClientConfig> {
+        error!("CRITICAL SECURITY ALERT: Attempting to use deprecated dangerous pairing configuration");
+        Err(CryptoError::CertificateGeneration(
+            "Deprecated dangerous pairing config - use client_config_secure_pairing instead".to_string()
+        ))
     }
 }
 

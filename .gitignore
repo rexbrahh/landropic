@@ -59,6 +59,11 @@ tarpaulin-report.html
 cobertura.xml
 lcov.info
 /test/
+tests/fixtures/temp/
+tests/integration/temp/
+tests/*.rs
+!tests/lib.rs
+scripts/test-validation.sh
 
 # Benchmarking & Profiling
 /target/criterion/
@@ -75,6 +80,10 @@ callgrind.out.*
 logs/
 logs_*/
 /log/
+# Keep validation scripts
+!scripts/validate-build.sh
+!scripts/setup-pre-commit.sh
+!tests/run_integration_tests.sh
 
 # Temporary files
 *.tmp
@@ -90,6 +99,7 @@ logs_*/
 /dist/
 *.tar.gz
 *.zip
+build-report.json
 
 # Docker
 docker-image.tar
@@ -143,6 +153,9 @@ identity.key
 /docs/build/
 /target/doc/
 *.pdf
+# Keep important docs
+!docs/SECURITY_ASSESSMENT.md
+!tests/README.md
 
 # Python virtual environments (for tooling)
 venv/
@@ -201,9 +214,6 @@ vgcore.*
 
 # Project-specific temporary files
 team_prompts/
-RELEASE_CHECKLIST.md
-RELEASE_STATUS.md
-SPRINT_PLAN.md
-COORDINATION_INSTRUCTIONS.md
-scripts/test-daemon.sh
+file_transfer_client.rs
+orchestrator_integration_test.rs
 
