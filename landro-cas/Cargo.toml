@@ -33,6 +33,12 @@ snap = "1.1"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 proptest = { workspace = true }
+tracing-test = "0.2"
+rand = "0.8"
+
+[[bench]]
+name = "comprehensive_bench"
+harness = false
 
 [[example]]
 name = "atomic_write_demo"

@@ -1,0 +1,164 @@
+{
+  "version": "0.0.1",
+  "protocol_name": "landropic-sync",
+  "description": "Simple one-way file synchronization protocol for alpha release",
+  
+  "message_types": {
+    "Hello": {
+      "type": "handshake",
+      "direction": "bidirectional",
+      "fields": {
+        "version": "string",
+        "device_id": "bytes[32]",
+        "device_name": "string",
+        "capabilities": "string[]",
+        "timestamp": "timestamp"
+      },
+      "description": "Initial handshake to establish connection and exchange device info"
+    },
+    
+    "FolderSummary": {
+      "type": "negotiation",
+      "direction": "bidirectional",
+      "fields": {
+        "folder_id": "string",
+        "folder_path": "string",
+        "manifest_hash": "bytes[32]",
+        "total_size": "uint64",
+        "file_count": "uint64",
+        "last_modified": "timestamp"
+      },
+      "description": "Exchange folder metadata to determine sync requirements"
+    },
+    
+    "Manifest": {
+      "type": "data",
+      "direction": "bidirectional",
+      "fields": {
+        "folder_id": "string",
+        "version": "uint32",
+        "files": "FileEntry[]"
+      },
+      "description": "Complete list of files and their metadata"
+    },
+    
+    "FileEntry": {
+      "type": "nested",
+      "fields": {
+        "path": "string",
+        "size": "uint64",
+        "modified": "timestamp",
+        "content_hash": "bytes[32]",
+        "chunk_hashes": "bytes[]",
+        "mode": "uint32"
+      },
+      "description": "Individual file metadata within manifest"
+    },
+    
+    "Want": {
+      "type": "request",
+      "direction": "bidirectional",
+      "fields": {
+        "folder_id": "string",
+        "chunk_hashes": "bytes[]",
+        "priority": "uint32"
+      },
+      "description": "Request specific chunks from peer"
+    },
+    
+    "ChunkData": {
+      "type": "data",
+      "direction": "bidirectional",
+      "fields": {
+        "hash": "bytes[32]",
+        "data": "bytes",
+        "compressed": "bool",
+        "uncompressed_size": "uint32"
+      },
+      "description": "Actual chunk content being transferred"
+    },
+    
+    "Ack": {
+      "type": "response",
+      "direction": "bidirectional",
+      "fields": {
+        "request_id": "string",
+        "success": "bool",
+        "message": "string"
+      },
+      "description": "Acknowledgment of received data"
+    },
+    
+    "Error": {
+      "type": "error",
+      "direction": "bidirectional",
+      "fields": {
+        "code": "uint32",
+        "message": "string",
+        "details": "string"
+      },
+      "description": "Error notification"
+    }
+  },
+  
+  "flow": {
+    "client_initiated": [
+      "Client → Server: Hello",
+      "Server → Client: Hello",
+      "Client → Server: FolderSummary",
+      "Server → Client: FolderSummary",
+      "Client → Server: Manifest",
+      "Server → Client: Want",
+      "Client → Server: ChunkData (multiple)",
+      "Server → Client: Ack (per chunk)",
+      "Server → Client: Ack (completion)"
+    ],
+    
+    "server_initiated": [
+      "Server waits for Hello",
+      "Then follows same flow"
+    ]
+  },
+  
+  "transport": {
+    "layer": "QUIC",
+    "streams": {
+      "control": "Stream 0 - Protocol messages",
+      "data": "Streams 1-N - Chunk transfers"
+    },
+    "encoding": "Protocol Buffers",
+    "max_message_size": 16777216,
+    "max_chunk_size": 4194304
+  },
+  
+  "configuration": {
+    "default_chunk_size": 65536,
+    "max_concurrent_streams": 64,
+    "stream_timeout_seconds": 30,
+    "max_want_chunks": 100,
+    "protocol_version": "1.0.0"
+  },
+  
+  "error_codes": {
+    "0": "Success",
+    "1": "Protocol version mismatch",
+    "2": "Invalid message format",
+    "3": "Chunk verification failed",
+    "4": "Storage error",
+    "5": "Network error",
+    "6": "Timeout",
+    "7": "Cancelled",
+    "8": "Resource exhausted",
+    "9": "Permission denied",
+    "10": "Not found"
+  },
+  
+  "simplifications_for_alpha": {
+    "sync_direction": "one-way only",
+    "conflict_resolution": "none (last write wins)",
+    "compression": "disabled for chunks",
+    "encryption": "rely on QUIC TLS",
+    "deduplication": "basic chunk-level only",
+    "resume": "simple state persistence"
+  }
+}

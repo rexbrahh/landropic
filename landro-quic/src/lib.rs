@@ -152,10 +152,18 @@ pub mod server;
 pub mod stream_transfer;
 pub mod transfer;
 pub mod zero_copy;
+pub mod stream_multiplexer;
+pub mod health_monitor;
+pub mod reconnection_manager;
+pub mod performance_optimizer;
 
 pub use client::QuicClient;
 pub use config::QuicConfig;
 pub use connection::{Connection, StreamType};
+pub use stream_multiplexer::{StreamMultiplexer, MultiplexConfig, ControlMessage, DataMessage};
+pub use health_monitor::{ConnectionHealthMonitor, HealthConfig, HealthStatus, ConnectionMetrics};
+pub use reconnection_manager::{ReconnectionManager, ReconnectionConfig, ConnectionState, ReconnectionStats};
+pub use performance_optimizer::{PerformanceOptimizer, TransferProfile, FileType, TransferPriority};
 pub use errors::{QuicError, Result};
 pub use pairing::{PairingContext, PairingManager, PairingState};
 pub use parallel_transfer::{
@@ -166,7 +174,7 @@ pub use stream_transfer::{
 };
 pub use pool::{ConnectionPool, PoolConfig, PooledConnection};
 pub use protocol::{BatchTransferManager, MessageType, ProtocolMessage, StreamProtocol};
-pub use recovery::{CircuitState, ConnectionHealthMonitor, RecoveryClient, RetryPolicy};
+pub use recovery::{CircuitState, ConnectionHealthMonitor as RecoveryHealthMonitor, RecoveryClient, RetryPolicy};
 pub use resumable::{ResumableTransferManager, TransferCheckpoint, TransferStatus};
 pub use server::QuicServer;
 pub use transfer::{QuicTransferEngine, TransferProgress};

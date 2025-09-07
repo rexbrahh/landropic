@@ -3,13 +3,20 @@ pub const SCHEMA_VERSION: u32 = 1;
 
 /// SQL schema for the index database
 pub const SCHEMA: &str = r#"
--- Enable WAL mode for better concurrency
+-- Performance-optimized SQLite settings
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
-PRAGMA cache_size = -64000; -- 64MB cache
+PRAGMA cache_size = -128000; -- 128MB cache (increased for better performance)
 PRAGMA temp_store = MEMORY;
-PRAGMA mmap_size = 268435456; -- 256MB mmap
+PRAGMA mmap_size = 536870912; -- 512MB mmap (increased)
 PRAGMA foreign_keys = ON;
+PRAGMA page_size = 4096; -- Optimal page size
+PRAGMA auto_vacuum = INCREMENTAL;
+PRAGMA wal_autocheckpoint = 1000; -- Checkpoint every 1000 pages
+PRAGMA checkpoint_fullfsync = 0; -- Faster checkpoints
+PRAGMA locking_mode = NORMAL; -- Allow concurrent access
+PRAGMA read_uncommitted = 1; -- Faster reads in WAL mode
+PRAGMA optimize; -- Optimize database on open
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -34,6 +41,8 @@ CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
 CREATE INDEX IF NOT EXISTS idx_files_content_hash ON files(content_hash);
 CREATE INDEX IF NOT EXISTS idx_files_modified_at ON files(modified_at); -- For time-based queries
 CREATE INDEX IF NOT EXISTS idx_files_size ON files(size); -- For size-based queries
+-- Compound index for content hash + size (common lookup pattern)
+CREATE INDEX IF NOT EXISTS idx_files_hash_size ON files(content_hash, size);
 
 -- Chunks table with reference counting for garbage collection
 CREATE TABLE IF NOT EXISTS chunks (
@@ -47,6 +56,8 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(hash);
 CREATE INDEX IF NOT EXISTS idx_chunks_ref_count ON chunks(ref_count); -- For garbage collection
 CREATE INDEX IF NOT EXISTS idx_chunks_size ON chunks(size); -- For size analysis
+-- Compound index for hash + size (common CAS lookup pattern)
+CREATE INDEX IF NOT EXISTS idx_chunks_hash_size ON chunks(hash, size);
 
 -- File-chunk mapping table with chunk metadata
 CREATE TABLE IF NOT EXISTS file_chunks (
@@ -126,4 +137,21 @@ CREATE TABLE IF NOT EXISTS sync_state (
 CREATE INDEX IF NOT EXISTS idx_sync_state_folder_path ON sync_state(folder_path);
 CREATE INDEX IF NOT EXISTS idx_sync_state_device_id ON sync_state(device_id);
 CREATE INDEX IF NOT EXISTS idx_sync_state_sync_in_progress ON sync_state(sync_in_progress);
+
+-- Partial transfers table for resumable operations
+CREATE TABLE IF NOT EXISTS partial_transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    temp_path TEXT NOT NULL UNIQUE, -- Path to temporary file
+    expected_hash TEXT, -- Expected final hash (if known)
+    total_size INTEGER, -- Expected total size (if known)
+    bytes_received INTEGER NOT NULL DEFAULT 0,
+    chunk_hash TEXT, -- Running hash state (serialized)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP -- Cleanup time
+);
+
+CREATE INDEX IF NOT EXISTS idx_partial_transfers_temp_path ON partial_transfers(temp_path);
+CREATE INDEX IF NOT EXISTS idx_partial_transfers_expected_hash ON partial_transfers(expected_hash);
+CREATE INDEX IF NOT EXISTS idx_partial_transfers_expires_at ON partial_transfers(expires_at);
 "#;

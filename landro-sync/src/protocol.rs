@@ -8,7 +8,8 @@
 //! 5. Ack → Confirm receipt
 
 use chrono::{DateTime, Utc};
-use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
@@ -16,12 +17,12 @@ use tracing::{debug, error, info, trace, warn};
 use landro_cas::ContentStore;
 use landro_chunker::ContentHash;
 use landro_index::manifest::{Manifest, ManifestEntry};
-use landro_proto::generated::{
-    error::ErrorType, Ack, ChunkData, Error as ProtoError, FileEntry as ProtoFileEntry,
+use landro_proto::{
+    Ack, ChunkData, Error as ProtoError,
     FolderSummary, Hello, Manifest as ProtoManifest, Want,
 };
 
-use crate::diff::{DiffComputer, DiffResult, IncrementalDiff};
+use crate::diff::{DiffResult, IncrementalDiff};
 use crate::errors::{Result, SyncError};
 use crate::state::{AsyncSyncDatabase, PeerState, PeerSyncState};
 
@@ -90,7 +91,7 @@ pub struct SyncSession {
 }
 
 /// Transfer statistics for a session
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TransferStats {
     pub bytes_sent: u64,
     pub bytes_received: u64,
@@ -136,6 +137,11 @@ impl SyncSession {
     /// Get current session state
     pub async fn state(&self) -> SessionState {
         self.state.read().await.clone()
+    }
+    
+    /// Get peer ID
+    pub fn peer_id(&self) -> &str {
+        &self.peer_id
     }
 
     /// Process Hello message

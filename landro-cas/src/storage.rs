@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs::{self, File};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 use tracing::{debug, trace, warn, error};
 
@@ -16,6 +16,43 @@ use crate::errors::{CasError, Result};
 use crate::packfile::{PackfileConfig, PackfileManager};
 use crate::validation;
 use landro_chunker::ContentHash;
+
+/// Partial transfer state for resumable operations
+#[derive(Debug, Clone)]
+pub struct PartialTransfer {
+    /// Temporary file path
+    pub temp_path: PathBuf,
+    /// Expected hash if known
+    pub expected_hash: Option<ContentHash>,
+    /// Expected total size if known
+    pub total_size: Option<u64>,
+    /// Bytes already received
+    pub bytes_received: u64,
+    /// Serialized hash state for resumption
+    pub hash_state: Option<String>,
+    /// When this partial transfer expires
+    pub expires_at: std::time::SystemTime,
+}
+
+impl PartialTransfer {
+    /// Create a new partial transfer
+    pub fn new(temp_path: PathBuf, expected_hash: Option<ContentHash>, total_size: Option<u64>) -> Self {
+        let expires_at = std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 3600); // 24 hours
+        Self {
+            temp_path,
+            expected_hash,
+            total_size,
+            bytes_received: 0,
+            hash_state: None,
+            expires_at,
+        }
+    }
+    
+    /// Check if this partial transfer has expired
+    pub fn is_expired(&self) -> bool {
+        std::time::SystemTime::now() > self.expires_at
+    }
+}
 
 /// Fsync policy for controlling write durability vs performance.
 #[derive(Debug, Clone)]
@@ -229,7 +266,7 @@ impl BatchWriter {
 }
 
 pub struct ContentStore {
-    root_path: PathBuf,
+    pub(crate) root_path: PathBuf,
     config: ContentStoreConfig,
     pending_syncs: Arc<AtomicU32>,
     packfile_manager: Option<Arc<Mutex<PackfileManager>>>,
@@ -931,6 +968,478 @@ impl ContentStore {
             Err(CasError::HashMismatch { .. }) => Ok(false),
             Err(e) => Err(e),
         }
+    }
+
+    /// Stream write operation that doesn't load full chunk into memory.
+    /// Calculates hash while streaming and verifies at the end.
+    ///
+    /// # Arguments
+    ///
+    /// * `reader` - Async reader to stream data from
+    /// * `expected_hash` - Optional expected hash for verification
+    ///
+    /// # Returns
+    ///
+    /// An ObjectRef containing the hash and size of the stored data
+    pub async fn write_stream<R>(&self, mut reader: R, expected_hash: Option<&ContentHash>) -> Result<ObjectRef>
+    where
+        R: AsyncRead + Unpin,
+    {
+        // Create a hasher to compute hash while streaming
+        let mut hasher = Hasher::new();
+        let temp_id = uuid::Uuid::new_v4();
+        let temp_path = self.root_path.join(".tmp").join(format!("{}.tmp", temp_id));
+        
+        // Ensure temp directory exists
+        if let Some(parent) = temp_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        
+        // Stream to temporary file while computing hash
+        let mut file = BufWriter::new(File::create(&temp_path).await?);
+        let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
+        let mut total_size = 0u64;
+        
+        loop {
+            let n = reader.read(&mut buffer).await?;
+            if n == 0 {
+                break;
+            }
+            
+            let chunk = &buffer[..n];
+            hasher.update(chunk);
+            file.write_all(chunk).await?;
+            total_size += n as u64;
+        }
+        
+        file.flush().await?;
+        
+        // Apply fsync based on policy
+        if matches!(self.config.fsync_policy, FsyncPolicy::Always) {
+            file.get_mut().sync_all().await?;
+        }
+        
+        drop(file); // Close the file
+        
+        // Compute final hash
+        let computed_hash = ContentHash::from_blake3(hasher.finalize());
+        
+        // Verify hash if expected
+        if let Some(expected) = expected_hash {
+            if &computed_hash != expected {
+                // Clean up temp file
+                let _ = fs::remove_file(&temp_path).await;
+                return Err(CasError::HashMismatch {
+                    expected: *expected,
+                    actual: computed_hash,
+                });
+            }
+        }
+        
+        // Check if object already exists
+        let object_path = self.object_path(&computed_hash);
+        if object_path.exists() {
+            // Remove temp file and return existing ref
+            fs::remove_file(&temp_path).await?;
+            
+            let obj_ref = ObjectRef {
+                hash: computed_hash,
+                size: total_size,
+            };
+            
+            // Update dedup index
+            {
+                let mut dedup = self.dedup_index.write().await;
+                dedup.insert(computed_hash, obj_ref.clone());
+            }
+            
+            return Ok(obj_ref);
+        }
+        
+        // Ensure shard directories exist
+        if let Some(parent) = object_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        
+        // Move temp file to final location
+        fs::rename(&temp_path, &object_path).await?;
+        
+        let obj_ref = ObjectRef {
+            hash: computed_hash,
+            size: total_size,
+        };
+        
+        // Update dedup index
+        {
+            let mut dedup = self.dedup_index.write().await;
+            dedup.insert(computed_hash, obj_ref.clone());
+        }
+        
+        // Update stats
+        self.stats.writes.fetch_add(1, Ordering::Relaxed);
+        self.stats.bytes_written.fetch_add(total_size, Ordering::Relaxed);
+        
+        debug!("Streamed write of {} ({} bytes)", computed_hash, total_size);
+        
+        Ok(obj_ref)
+    }
+    
+    /// Stream read operation that returns an async reader instead of loading full chunk.
+    /// Useful for network transfers and large files.
+    ///
+    /// # Arguments
+    ///
+    /// * `hash` - The hash of the object to read
+    ///
+    /// # Returns
+    ///
+    /// A boxed async reader that streams the object data
+    pub async fn read_stream(&self, hash: &ContentHash) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
+        // Validate hash format
+        validation::validate_content_hash(&hash.to_string())
+            .map_err(|e| CasError::InvalidOperation(format!("Hash validation failed: {}", e)))?;
+        
+        // Check if exists first
+        if !self.exists(hash).await {
+            return Err(CasError::ObjectNotFound(*hash));
+        }
+        
+        // Try packfiles first if enabled
+        if self.config.enable_packfiles {
+            if let Some(ref manager) = self.packfile_manager {
+                let manager_guard = manager.lock().await;
+                if let Ok(Some(data)) = manager_guard.read_packed(hash).await {
+                    // For packfile data, wrap in a cursor for streaming
+                    use std::io::Cursor;
+                    let cursor = Cursor::new(data.to_vec());
+                    return Ok(Box::new(cursor));
+                }
+            }
+        }
+        
+        // Stream from individual file
+        let object_path = self.object_path(hash);
+        let file = File::open(&object_path).await?;
+        let reader = BufReader::new(file);
+        
+        // Update stats
+        self.stats.reads.fetch_add(1, Ordering::Relaxed);
+        
+        Ok(Box::new(reader))
+    }
+    
+    /// Write multiple chunks in a single batch transaction for improved performance.
+    /// Uses streaming to avoid loading all chunks into memory at once.
+    ///
+    /// # Arguments
+    ///
+    /// * `chunks` - Iterator of (data, optional expected hash) pairs
+    ///
+    /// # Returns
+    ///
+    /// Vector of ObjectRefs for the written chunks
+    pub async fn write_batch_stream<I, R>(&self, chunks: I) -> Result<Vec<ObjectRef>>
+    where
+        I: IntoIterator<Item = (R, Option<ContentHash>)>,
+        R: AsyncRead + Unpin + Send + 'static,
+    {
+        let chunks: Vec<_> = chunks.into_iter().collect();
+        let mut results = Vec::with_capacity(chunks.len());
+        
+        // Process chunks with concurrency control
+        let mut handles = Vec::new();
+        
+        for (reader, expected_hash) in chunks {
+            let store = self.clone();
+            let permit = self.write_semaphore.clone().acquire_owned().await;
+            
+            let handle = tokio::spawn(async move {
+                let _permit = permit;
+                store.write_stream(reader, expected_hash.as_ref()).await
+            });
+            handles.push(handle);
+        }
+        
+        // Collect results
+        for handle in handles {
+            let result = handle.await
+                .map_err(|e| CasError::Internal(format!("Batch stream write failed: {}", e)))??;
+            results.push(result);
+        }
+        
+        // Update batch stats
+        self.stats.batch_flushes.fetch_add(1, Ordering::Relaxed);
+        
+        Ok(results)
+    }
+
+    /// Start a resumable write operation that can be interrupted and resumed later.
+    /// Returns a partial transfer handle that can be used to resume the operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `expected_hash` - Optional expected hash for verification
+    /// * `total_size` - Optional total size for progress tracking
+    ///
+    /// # Returns
+    ///
+    /// A PartialTransfer handle for resuming the operation
+    pub async fn start_resumable_write(
+        &self,
+        expected_hash: Option<ContentHash>,
+        total_size: Option<u64>,
+    ) -> Result<PartialTransfer> {
+        let temp_id = uuid::Uuid::new_v4();
+        let temp_path = self.root_path.join(".tmp").join(format!("{}.partial", temp_id));
+        
+        // Ensure temp directory exists
+        if let Some(parent) = temp_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        
+        let partial = PartialTransfer::new(temp_path, expected_hash, total_size);
+        
+        debug!("Started resumable write: {:?}", partial.temp_path);
+        
+        Ok(partial)
+    }
+    
+    /// Continue writing to a partial transfer from a reader.
+    /// This appends new data to the existing partial file and updates the hash.
+    ///
+    /// # Arguments
+    ///
+    /// * `partial` - Mutable partial transfer to update
+    /// * `reader` - Reader to append data from
+    ///
+    /// # Returns
+    ///
+    /// Updated partial transfer with new bytes received
+    pub async fn continue_resumable_write<R>(
+        &self,
+        partial: &mut PartialTransfer,
+        mut reader: R,
+    ) -> Result<()>
+    where
+        R: AsyncRead + Unpin,
+    {
+        if partial.is_expired() {
+            return Err(CasError::InvalidOperation("Partial transfer has expired".to_string()));
+        }
+        
+        // Open/create the partial file for appending
+        let mut file = if partial.bytes_received == 0 {
+            BufWriter::new(File::create(&partial.temp_path).await?)
+        } else {
+            BufWriter::new(File::options().append(true).open(&partial.temp_path).await?)
+        };
+        
+        // Initialize or restore hasher state
+        let mut hasher = if let Some(_hash_state) = &partial.hash_state {
+            // TODO: Deserialize hasher state when blake3 supports it
+            // For now, re-read the existing file to rebuild state
+            if partial.bytes_received > 0 {
+                let mut existing_file = File::open(&partial.temp_path).await?;
+                let mut existing_hasher = Hasher::new();
+                let mut buffer = vec![0u8; 64 * 1024];
+                loop {
+                    let n = existing_file.read(&mut buffer).await?;
+                    if n == 0 { break; }
+                    existing_hasher.update(&buffer[..n]);
+                }
+                existing_hasher
+            } else {
+                Hasher::new()
+            }
+        } else {
+            Hasher::new()
+        };
+        
+        // Stream new data while updating hash
+        let mut buffer = vec![0u8; 64 * 1024];
+        let mut bytes_written = 0u64;
+        
+        loop {
+            let n = reader.read(&mut buffer).await?;
+            if n == 0 {
+                break;
+            }
+            
+            let chunk = &buffer[..n];
+            hasher.update(chunk);
+            file.write_all(chunk).await?;
+            bytes_written += n as u64;
+        }
+        
+        file.flush().await?;
+        
+        // Update partial transfer state
+        partial.bytes_received += bytes_written;
+        partial.hash_state = Some("state_placeholder".to_string()); // TODO: Serialize hasher state
+        
+        debug!("Resumed write: {} bytes added to {:?} (total: {})", 
+               bytes_written, partial.temp_path, partial.bytes_received);
+        
+        Ok(())
+    }
+    
+    /// Complete a resumable write operation, moving the temp file to final location.
+    /// Verifies the final hash against expected hash if provided.
+    ///
+    /// # Arguments
+    ///
+    /// * `partial` - Partial transfer to complete
+    ///
+    /// # Returns
+    ///
+    /// ObjectRef of the completed object
+    pub async fn complete_resumable_write(&self, partial: PartialTransfer) -> Result<ObjectRef> {
+        if partial.is_expired() {
+            // Clean up expired transfer
+            let _ = fs::remove_file(&partial.temp_path).await;
+            return Err(CasError::InvalidOperation("Partial transfer has expired".to_string()));
+        }
+        
+        if !partial.temp_path.exists() {
+            return Err(CasError::InvalidOperation("Partial transfer file not found".to_string()));
+        }
+        
+        // Re-compute hash from the complete file to verify integrity
+        let mut file = File::open(&partial.temp_path).await?;
+        let mut hasher = Hasher::new();
+        let mut buffer = vec![0u8; 64 * 1024];
+        let mut total_size = 0u64;
+        
+        loop {
+            let n = file.read(&mut buffer).await?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buffer[..n]);
+            total_size += n as u64;
+        }
+        
+        let computed_hash = ContentHash::from_blake3(hasher.finalize());
+        
+        // Verify against expected hash if provided
+        if let Some(expected) = partial.expected_hash {
+            if computed_hash != expected {
+                // Clean up failed transfer
+                let _ = fs::remove_file(&partial.temp_path).await;
+                return Err(CasError::HashMismatch {
+                    expected,
+                    actual: computed_hash,
+                });
+            }
+        }
+        
+        // Verify against expected size if provided
+        if let Some(expected_size) = partial.total_size {
+            if total_size != expected_size {
+                let _ = fs::remove_file(&partial.temp_path).await;
+                return Err(CasError::InvalidOperation(
+                    format!("Size mismatch: expected {}, got {}", expected_size, total_size)
+                ));
+            }
+        }
+        
+        // Check if object already exists
+        let object_path = self.object_path(&computed_hash);
+        if object_path.exists() {
+            // Remove temp file and return existing ref
+            fs::remove_file(&partial.temp_path).await?;
+            
+            let obj_ref = ObjectRef {
+                hash: computed_hash,
+                size: total_size,
+            };
+            
+            // Update dedup index
+            {
+                let mut dedup = self.dedup_index.write().await;
+                dedup.insert(computed_hash, obj_ref.clone());
+            }
+            
+            return Ok(obj_ref);
+        }
+        
+        // Ensure shard directories exist
+        if let Some(parent) = object_path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        
+        // Move temp file to final location
+        fs::rename(&partial.temp_path, &object_path).await?;
+        
+        let obj_ref = ObjectRef {
+            hash: computed_hash,
+            size: total_size,
+        };
+        
+        // Update dedup index
+        {
+            let mut dedup = self.dedup_index.write().await;
+            dedup.insert(computed_hash, obj_ref.clone());
+        }
+        
+        // Update stats
+        self.stats.writes.fetch_add(1, Ordering::Relaxed);
+        self.stats.bytes_written.fetch_add(total_size, Ordering::Relaxed);
+        
+        debug!("Completed resumable write of {} ({} bytes)", computed_hash, total_size);
+        
+        Ok(obj_ref)
+    }
+    
+    /// Cancel a resumable write operation, cleaning up temporary files.
+    ///
+    /// # Arguments
+    ///
+    /// * `partial` - Partial transfer to cancel
+    pub async fn cancel_resumable_write(&self, partial: PartialTransfer) -> Result<()> {
+        if partial.temp_path.exists() {
+            fs::remove_file(&partial.temp_path).await?;
+            debug!("Cancelled resumable write: {:?}", partial.temp_path);
+        }
+        Ok(())
+    }
+    
+    /// Clean up expired partial transfers.
+    /// Should be called periodically for maintenance.
+    pub async fn cleanup_expired_partials(&self) -> Result<usize> {
+        let temp_dir = self.root_path.join(".tmp");
+        if !temp_dir.exists() {
+            return Ok(0);
+        }
+        
+        let mut cleaned_count = 0;
+        let now = std::time::SystemTime::now();
+        
+        let mut dir = fs::read_dir(&temp_dir).await?;
+        while let Some(entry) = dir.next_entry().await? {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.ends_with(".partial") {
+                    // Check if file is older than 24 hours
+                    if let Ok(metadata) = entry.metadata().await {
+                        if let Ok(created) = metadata.created() {
+                            if now.duration_since(created).unwrap_or_default().as_secs() > 24 * 3600 {
+                                let _ = fs::remove_file(&path).await;
+                                cleaned_count += 1;
+                                debug!("Cleaned up expired partial: {:?}", path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(cleaned_count)
+    }
+    
+    /// Get access to metrics collection
+    pub fn get_metrics(&self) -> &ContentStoreRuntimeStats {
+        &self.stats
     }
 
     /// Delete an object from the store.

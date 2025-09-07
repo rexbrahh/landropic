@@ -31,7 +31,7 @@ result-*
 .TemporaryItems
 .Trashes
 .VolumeIcon.icns
-*.png
+
 
 ## Windows
 Thumbs.db
@@ -58,6 +58,7 @@ test-results/
 tarpaulin-report.html
 cobertura.xml
 lcov.info
+/test/
 
 # Benchmarking & Profiling
 /target/criterion/
@@ -197,3 +198,12 @@ vgcore.*
 .history/
 .node_modules/
 .npm/
+
+# Project-specific temporary files
+team_prompts/
+RELEASE_CHECKLIST.md
+RELEASE_STATUS.md
+SPRINT_PLAN.md
+COORDINATION_INSTRUCTIONS.md
+scripts/test-daemon.sh
+

@@ -13,11 +13,13 @@ use landro_daemon::{
     discovery::DiscoveryService,
     orchestrator::{OrchestratorConfig, OrchestratorMessage, SyncOrchestrator},
     watcher::{FileEvent, FileWatcher},
+    bloom_sync_integration::BloomSyncEngine,
+    sync_engine::{create_enhanced_sync_engine, EnhancedSyncEngine},
 };
 use landro_index::async_indexer::AsyncIndexer;
 use landro_quic::{QuicConfig, QuicServer};
-// use landro_sync::protocol::SyncSession;  // Not needed for v1.0
-// use landro_sync::state::AsyncSyncDatabase;  // Not needed for v1.0
+use landro_sync::protocol::SyncSession;
+use landro_sync::state::AsyncSyncDatabase;
 use landro_quic::Connection;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -109,35 +111,17 @@ async fn process_sync_message(
     msg_data: &[u8],
     store: &Arc<ContentStore>,
 ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-    use landro_daemon::sync_engine::bloom_diff_protocol::{DiffProtocolHandler, DiffProtocolMessage};
+    // TODO: Implement bloom diff protocol in future version
+    // For now, just return None to indicate no response
     
-    // Try to decompress and deserialize the Bloom filter protocol message
-    match DiffProtocolHandler::decompress_message(msg_data) {
-        Ok(bloom_msg) => {
-            // Handle Bloom filter diff protocol messages
-            let handler = DiffProtocolHandler::new();
-            
-            // Process the message (would need access to local manifest)
-            let response = handler.handle_message(
-                bloom_msg,
-                &session.remote_device_id,
-                None, // Would pass local manifest here
-            ).await?;
-            
-            // Compress response if any
-            if let Some(resp_msg) = response {
-                let compressed = DiffProtocolHandler::compress_message(&resp_msg)?;
-                Ok(Some(compressed))
-            } else {
-                Ok(None)
-            }
-        }
-        Err(_) => {
-            // Fall back to legacy protocol handling
-            // This would decode the protobuf message and handle it
-            Ok(None)
-        }
-    }
+    // For v0.0.1-alpha, we'll implement basic message handling
+    // Future versions will add bloom filter diff protocol
+    
+    // Basic echo response for testing
+    info!("Received sync message of {} bytes", msg_data.len());
+    
+    // Return None for now - actual sync protocol to be implemented
+    Ok(None)
 }
 
 #[tokio::main]
@@ -191,15 +175,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Initializing indexer");
     let indexer = Arc::new(AsyncIndexer::new(&cas_path, &db_path, Default::default()).await?);
 
-    // Create orchestrator
+    // Create orchestrator first to get tx for sync engines
     let config = OrchestratorConfig::default();
     let (mut orchestrator, tx) =
         SyncOrchestrator::new(config, store.clone(), chunker.clone(), indexer.clone(), &storage_path).await?;
 
+    // Initialize Day 2 Enhanced Sync Engine
+    info!("Initializing enhanced Bloom sync engine");
+    let enhanced_sync = Arc::new(BloomSyncEngine::new(
+        identity.device_id(),
+        store.clone(),
+        indexer.clone(),
+    ).await?);
+
+    // Initialize Day 3 Enhanced Sync Engine with health monitoring
+    info!("Initializing Day 3 enhanced sync engine with health monitoring");
+    let day3_sync_engine = create_enhanced_sync_engine(
+        store.clone(),
+        indexer.clone(),
+        tx.clone(),
+    ).await?;
+
     // Initialize QUIC transport through orchestrator
-    let bind_addr = SocketAddr::from(([0, 0, 0, 0], 9876));
+    let port = std::env::var("LANDROPIC_PORT")
+        .unwrap_or_else(|_| "9876".to_string())
+        .parse::<u16>()
+        .unwrap_or(9876);
+    let bind_addr = SocketAddr::from(([0, 0, 0, 0], port));
     orchestrator.initialize_quic_transport(bind_addr).await?;
-    info!("QUIC transport initialized on port 9876");
+    info!("QUIC transport initialized on port {}", port);
     
     // Create channels for QUIC<->orchestrator communication (kept for compatibility)
     let (quic_tx, _quic_rx) = mpsc::channel::<QuicMessage>(100);
@@ -235,7 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Starting mDNS discovery service");
     let mut discovery = DiscoveryService::new(&device_name)?;
     discovery
-        .start_advertising(9876, vec!["sync".to_string(), "transfer".to_string()])
+        .start_advertising(port, vec!["sync".to_string(), "transfer".to_string()])
         .await?;
 
     // Monitor peer discovery

@@ -17,6 +17,7 @@ landro-proto = { path = "../landro-proto" }
 landro-index = { path = "../landro-index" }
 landro-cas = { path = "../landro-cas" }
 landro-chunker = { path = "../landro-chunker" }
+landro-quic = { path = "../landro-quic" }
 
 # Async runtime
 tokio = { workspace = true }
@@ -53,6 +54,10 @@ hex = { workspace = true }
 # Protocol buffers
 prost = { workspace = true }
 prost-types = { workspace = true }
+
+# Other dependencies
+uuid = { version = "1.0", features = ["v4"] }
+bytes = "1.7"
 
 [dev-dependencies]
 tempfile = { workspace = true }

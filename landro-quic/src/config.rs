@@ -9,7 +9,7 @@ use landro_crypto::{CertificateGenerator, CertificateVerifier, DeviceIdentity};
 use crate::errors::{QuicError, Result};
 
 /// QUIC configuration builder optimized for LAN file transfers
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct QuicConfig {
     /// Bind address for server
     pub bind_addr: SocketAddr,

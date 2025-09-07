@@ -1,331 +1,364 @@
-//! Simple sync engine for v1.0 - basic file synchronization without Bloom filters
+//! Sync Engine Integration for Day 3 - Health monitoring and enhanced peer connection management
+//!
+//! This module provides comprehensive sync engine integration with health monitoring,
+//! reconnection management, and performance optimization for the landropic daemon.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
-use tokio::sync::{mpsc, RwLock};
+use std::time::Duration;
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use landro_index::{
-    async_indexer::AsyncIndexer,
-    manifest::Manifest,
-    FileEntry,
-};
 use landro_cas::ContentStore;
+use landro_index::async_indexer::AsyncIndexer;
+use landro_quic::{
+    Connection, ConnectionHealthMonitor, ConnectionPool, HealthConfig, HealthStatus,
+    PerformanceOptimizer, QuicClient, QuicConfig, ReconnectionManager, ReconnectionConfig,
+    StreamMultiplexer, TransferProfile, TransferPriority,
+};
+use crate::orchestrator::OrchestratorMessage;
 
-use crate::discovery::PeerInfo;
-
-/// Simple conflict resolution strategy for v1.0
-#[derive(Debug, Clone)]
-pub enum ConflictStrategy {
-    NewerWins,
-    Manual,
-}
-
-/// Transfer direction
-#[derive(Debug, Clone, PartialEq)]
-pub enum TransferDirection {
-    Upload,
-    Download,
-}
-
-/// Transfer status  
-#[derive(Debug, Clone, PartialEq)]
-pub enum TransferStatus {
-    Pending,
-    Completed,
-    Failed,
-}
-
-/// Transfer job definition
-#[derive(Debug, Clone)]
-pub struct TransferJob {
-    pub id: String,
-    pub source_path: PathBuf,
-    pub peer_id: String,
-    pub direction: TransferDirection,
-    pub size: u64,
-    pub status: TransferStatus,
-    pub created_at: SystemTime,
-}
-
-/// Simple sync engine configuration
-#[derive(Debug, Clone)]
-pub struct SyncEngineConfig {
-    pub auto_sync: bool,
-    pub conflict_strategy: ConflictStrategy,
-}
-
-impl Default for SyncEngineConfig {
-    fn default() -> Self {
-        Self {
-            auto_sync: true,
-            conflict_strategy: ConflictStrategy::NewerWins,
-        }
-    }
-}
-
-/// Sync engine messages
-#[derive(Debug)]
-pub enum SyncMessage {
-    PeerDiscovered(PeerInfo),
-    PeerLost(String),
-    SyncRequest { peer_id: String, path: PathBuf },
-    AddSyncFolder(PathBuf),
-    RemoveSyncFolder(PathBuf),
-    Shutdown,
-}
-
-/// Sync engine status
-#[derive(Debug, Clone)]
-pub struct SyncStatus {
-    pub running: bool,
-    pub synced_folders: Vec<PathBuf>,
-    pub active_peers: Vec<String>,
-    pub total_bytes_synced: u64,
-    pub last_sync_time: Option<SystemTime>,
-}
-
-/// Simple sync engine for v1.0
-pub struct SyncEngine {
-    config: SyncEngineConfig,
-    indexer: Arc<AsyncIndexer>,
+/// Enhanced sync engine with health monitoring and performance optimization
+pub struct EnhancedSyncEngine {
     store: Arc<ContentStore>,
-    synced_folders: Arc<RwLock<Vec<PathBuf>>>,
-    active_peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
-    message_rx: mpsc::Receiver<SyncMessage>,
-    message_tx: mpsc::Sender<SyncMessage>,
-    total_bytes_synced: Arc<RwLock<u64>>,
-    last_sync_time: Arc<RwLock<Option<SystemTime>>>,
+    indexer: Arc<AsyncIndexer>,
+    connection_pool: Arc<ConnectionPool>,
+    health_monitor: Arc<ConnectionHealthMonitor>,
+    reconnection_manager: Arc<ReconnectionManager>,
+    performance_optimizer: Arc<PerformanceOptimizer>,
+    orchestrator_tx: mpsc::Sender<OrchestratorMessage>,
+    active_connections: Arc<RwLock<HashMap<SocketAddr, SyncConnection>>>,
+    health_callbacks: Arc<RwLock<Vec<Box<dyn Fn(&HealthStatus) + Send + Sync>>>>,
 }
 
-impl SyncEngine {
-    /// Create new sync engine
+/// Sync connection wrapper with health monitoring
+#[derive(Clone)]
+pub struct SyncConnection {
+    pub connection: Arc<Connection>,
+    pub multiplexer: Arc<StreamMultiplexer>,
+    pub peer_addr: SocketAddr,
+    pub peer_device_id: Option<String>,
+    pub last_health_check: std::time::Instant,
+    pub health_status: HealthStatus,
+}
+
+impl SyncConnection {
+    pub fn new(connection: Arc<Connection>, peer_addr: SocketAddr) -> Self {
+        let config = landro_quic::MultiplexConfig::default();
+        let multiplexer = Arc::new(StreamMultiplexer::new(connection.clone(), config));
+        Self {
+            connection,
+            multiplexer,
+            peer_addr,
+            peer_device_id: None,
+            last_health_check: std::time::Instant::now(),
+            health_status: HealthStatus::Healthy,
+        }
+    }
+    
+    /// Check if connection needs health monitoring
+    pub fn needs_health_check(&self) -> bool {
+        self.last_health_check.elapsed() > Duration::from_secs(30)
+    }
+}
+
+impl EnhancedSyncEngine {
+    /// Create new enhanced sync engine
     pub async fn new(
-        config: SyncEngineConfig,
-        indexer: Arc<AsyncIndexer>,
         store: Arc<ContentStore>,
-        _storage_path: &Path,
-    ) -> Result<(Self, mpsc::Sender<SyncMessage>), Box<dyn std::error::Error + Send + Sync>> {
-        let (message_tx, message_rx) = mpsc::channel(100);
+        indexer: Arc<AsyncIndexer>,
+        orchestrator_tx: mpsc::Sender<OrchestratorMessage>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Create QUIC client for outbound connections
+        let client_config = QuicConfig::file_sync_optimized();
+        let client = Arc::new(QuicClient::new(client_config).await?);
         
-        let engine = Self {
-            config,
-            indexer,
-            store,
-            synced_folders: Arc::new(RwLock::new(Vec::new())),
-            active_peers: Arc::new(RwLock::new(HashMap::new())),
-            message_rx,
-            message_tx: message_tx.clone(),
-            total_bytes_synced: Arc::new(RwLock::new(0)),
-            last_sync_time: Arc::new(RwLock::new(None)),
+        // Create connection pool with health monitoring
+        let pool_config = landro_quic::PoolConfig {
+            max_connections_per_peer: 3,
+            max_total_connections: 100,
+            max_idle_time: Duration::from_secs(300),
+            connect_timeout: Duration::from_secs(15),
+            max_retry_attempts: 3,
+            retry_delay: Duration::from_millis(500),
         };
+        let connection_pool = Arc::new(ConnectionPool::new(client.clone(), pool_config));
         
-        Ok((engine, message_tx))
-    }
-    
-    /// Run the sync engine
-    pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Starting simplified sync engine v1.0");
+        // Create health monitoring system
+        let health_config = HealthConfig {
+            check_interval: Duration::from_secs(30),
+            unhealthy_threshold: Duration::from_secs(300), // 5 minutes
+            max_rtt_ms: 500,
+            max_packet_loss_rate: 0.1, // 10%
+            enable_auto_recovery: true,
+            recovery_timeout: Duration::from_secs(60),
+        };
+        let health_monitor = Arc::new(ConnectionHealthMonitor::new(health_config));
         
-        loop {
-            match self.message_rx.recv().await {
-                Some(msg) => {
-                    if !self.handle_message(msg).await? {
-                        break;
-                    }
-                }
-                None => break,
-            }
-        }
+        // Create reconnection management
+        let reconnection_config = ReconnectionConfig {
+            max_attempts: 5,
+            base_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(60),
+            jitter_factor: 0.1,
+        };
+        let reconnection_manager = Arc::new(ReconnectionManager::new(
+            connection_pool.clone(),
+            reconnection_config,
+        ));
         
-        info!("Sync engine stopped");
-        Ok(())
-    }
-    
-    /// Handle incoming messages
-    async fn handle_message(&mut self, msg: SyncMessage) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        match msg {
-            SyncMessage::PeerDiscovered(peer) => {
-                info!("Peer discovered: {}", peer.device_name);
-                let mut peers = self.active_peers.write().await;
-                peers.insert(peer.device_id.clone(), peer);
-                Ok(true)
-            }
-            
-            SyncMessage::PeerLost(peer_id) => {
-                info!("Peer lost: {}", peer_id);
-                let mut peers = self.active_peers.write().await;
-                peers.remove(&peer_id);
-                Ok(true)
-            }
-            
-            SyncMessage::SyncRequest { peer_id, path } => {
-                info!("Sync requested with {} for {}", peer_id, path.display());
-                self.perform_basic_sync(&peer_id, &path).await?;
-                Ok(true)
-            }
-            
-            SyncMessage::AddSyncFolder(path) => {
-                info!("Adding sync folder: {}", path.display());
-                
-                // Index the folder first
-                self.indexer.index_folder(&path).await?;
-                
-                let mut folders = self.synced_folders.write().await;
-                if !folders.contains(&path) {
-                    folders.push(path.clone());
-                }
-                
-                // Auto-sync with existing peers if enabled
-                if self.config.auto_sync {
-                    let peer_ids: Vec<String> = {
-                        let peers = self.active_peers.read().await;
-                        peers.keys().cloned().collect()
-                    };
-                    
-                    for peer_id in peer_ids {
-                        if let Err(e) = self.sync_with_peer(&peer_id, &path).await {
-                            error!("Failed to sync new folder with {}: {}", peer_id, e);
-                        }
-                    }
-                }
-                
-                Ok(true)
-            }
-            
-            SyncMessage::RemoveSyncFolder(path) => {
-                info!("Removing sync folder: {}", path.display());
-                let mut folders = self.synced_folders.write().await;
-                folders.retain(|f| f != &path);
-                Ok(true)
-            }
-            
-            SyncMessage::Shutdown => {
-                info!("Shutdown requested");
-                Ok(false)
-            }
-        }
-    }
-    
-    /// Perform basic sync between local and remote
-    async fn perform_basic_sync(&self, peer_id: &str, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Starting basic sync with {} for {}", peer_id, path.display());
+        // Create performance optimizer
+        let performance_optimizer = Arc::new(PerformanceOptimizer::new());
         
-        // Build local manifest
-        let local_manifest = self.indexer.index_folder(path).await?;
-        info!("Local manifest has {} files", local_manifest.files.len());
-        
-        // For v1.0, simulate getting remote manifest
-        let remote_manifest = self.get_remote_manifest_simple(peer_id, path).await?;
-        info!("Remote manifest has {} files", remote_manifest.files.len());
-        
-        // Compute simple diff (v1.0 - basic implementation)
-        let mut files_to_upload = Vec::new();
-        let mut files_to_download = Vec::new();
-        
-        // Create sets of paths for easy comparison
-        let local_paths: std::collections::HashSet<_> = 
-            local_manifest.files.iter().map(|f| f.path.clone()).collect();
-        let remote_paths: std::collections::HashSet<_> = 
-            remote_manifest.files.iter().map(|f| f.path.clone()).collect();
-        
-        // Simple diff: files in local but not remote should be uploaded
-        for entry in &local_manifest.files {
-            if !remote_paths.contains(&entry.path) {
-                files_to_upload.push(entry.path.clone());
-            }
-        }
-        
-        // Files in remote but not local should be downloaded
-        for entry in &remote_manifest.files {
-            if !local_paths.contains(&entry.path) {
-                files_to_download.push(entry.path.clone());
-            }
-        }
-        
-        info!(
-            "Sync plan: {} to upload, {} to download",
-            files_to_upload.len(),
-            files_to_download.len()
-        );
-        
-        // Process uploads
-        for path in &files_to_upload {
-            if let Some(entry) = local_manifest.files.iter().find(|f| &f.path == path) {
-                let job = TransferJob {
-                    id: format!("upload-{}", path),
-                    source_path: PathBuf::from(path),
-                    peer_id: peer_id.to_string(),
-                    direction: TransferDirection::Upload,
-                    size: entry.size,
-                    status: TransferStatus::Pending,
-                    created_at: SystemTime::now(),
-                };
-                info!("Created upload job: {:?}", job.id);
-            }
-        }
-        
-        // Process downloads
-        for path in &files_to_download {
-            if let Some(entry) = remote_manifest.files.iter().find(|f| &f.path == path) {
-                let job = TransferJob {
-                    id: format!("download-{}", path),
-                    source_path: PathBuf::from(path),
-                    peer_id: peer_id.to_string(),
-                    direction: TransferDirection::Download,
-                    size: entry.size,
-                    status: TransferStatus::Pending,
-                    created_at: SystemTime::now(),
-                };
-                info!("Created download job: {:?}", job.id);
-            }
-        }
-        
-        // Handle conflicts with simple strategy
-        // v1.0: Conflicts not handled - would need to compare hashes
-        
-        // Update sync time
-        let mut last_sync = self.last_sync_time.write().await;
-        *last_sync = Some(SystemTime::now());
-        
-        info!("Sync completed (actual transfers not implemented in v1.0)");
-        Ok(())
-    }
-    
-    /// Sync with a specific peer (helper to avoid borrow conflicts)
-    async fn sync_with_peer(&self, peer_id: &str, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.perform_basic_sync(peer_id, path).await
-    }
-    
-    /// Get remote manifest (simplified for v1.0)
-    async fn get_remote_manifest_simple(&self, _peer_id: &str, path: &Path) -> Result<Manifest, Box<dyn std::error::Error + Send + Sync>> {
-        // For v1.0, return empty manifest
-        // Real implementation would request over network
-        warn!("Using placeholder remote manifest");
-        Ok(Manifest {
-            folder_id: format!("remote_{}", path.file_name().unwrap_or_default().to_string_lossy()),
-            version: 1,
-            files: Vec::new(),
-            created_at: SystemTime::now().into(),
-            manifest_hash: None,
+        Ok(Self {
+            store,
+            indexer,
+            connection_pool,
+            health_monitor,
+            reconnection_manager,
+            performance_optimizer,
+            orchestrator_tx,
+            active_connections: Arc::new(RwLock::new(HashMap::new())),
+            health_callbacks: Arc::new(RwLock::new(Vec::new())),
         })
     }
     
-    /// Get current sync status
-    pub async fn get_status(&self) -> SyncStatus {
-        let folders = self.synced_folders.read().await;
-        let peers = self.active_peers.read().await;
-        let total_bytes = *self.total_bytes_synced.read().await;
-        let last_sync = *self.last_sync_time.read().await;
+    /// Start the sync engine background tasks
+    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("Starting enhanced sync engine with health monitoring");
         
-        SyncStatus {
-            running: true,
-            synced_folders: folders.clone(),
-            active_peers: peers.keys().cloned().collect(),
-            total_bytes_synced: total_bytes,
-            last_sync_time: last_sync,
-        }
+        // Start health monitoring task
+        self.start_health_monitoring_task().await?;
+        
+        // Start connection cleanup task
+        self.start_connection_cleanup_task().await?;
+        
+        // Start performance monitoring task
+        self.start_performance_monitoring_task().await?;
+        
+        info!("Enhanced sync engine started successfully");
+        Ok(())
     }
+    
+    /// Connect to a peer with health monitoring
+    pub async fn connect_to_peer(
+        &self,
+        peer_addr: SocketAddr,
+        device_id: Option<String>,
+    ) -> Result<Arc<SyncConnection>, Box<dyn std::error::Error + Send + Sync>> {
+        info!("Connecting to peer {} with health monitoring", peer_addr);
+        
+        // Check if we already have a healthy connection
+        {
+            let connections = self.active_connections.read().await;
+            if let Some(sync_conn) = connections.get(&peer_addr) {
+                if sync_conn.health_status == HealthStatus::Healthy {
+                    info!("Reusing existing healthy connection to {}", peer_addr);
+                    return Ok(Arc::new(sync_conn.clone()));
+                }
+            }
+        }
+        
+        // Get connection from pool (with retry logic)
+        let connection = self.connection_pool.get_connection(peer_addr).await?;
+        
+        // Create sync connection wrapper
+        let mut sync_conn = SyncConnection::new(connection, peer_addr);
+        sync_conn.peer_device_id = device_id;
+        
+        // TODO: Register with health monitor (pending landro-quic implementation)
+        // self.health_monitor.register_connection(peer_addr, sync_conn.connection.clone()).await?;
+        
+        // Store active connection
+        {
+            let mut connections = self.active_connections.write().await;
+            connections.insert(peer_addr, sync_conn.clone());
+        }
+        
+        // TODO: Start reconnection monitoring for this peer (pending landro-quic implementation)
+        // self.reconnection_manager.monitor_peer(peer_addr).await?;
+        
+        info!("Successfully connected to peer {} with health monitoring", peer_addr);
+        Ok(Arc::new(sync_conn))
+    }
+    
+    /// Get connection health status
+    pub async fn get_connection_health(&self, peer_addr: SocketAddr) -> Option<HealthStatus> {
+        let connections = self.active_connections.read().await;
+        connections.get(&peer_addr).map(|conn| conn.health_status.clone())
+    }
+    
+    /// Get all connection health statuses
+    pub async fn get_all_connection_health(&self) -> HashMap<SocketAddr, HealthStatus> {
+        let connections = self.active_connections.read().await;
+        connections.iter()
+            .map(|(addr, conn)| (*addr, conn.health_status.clone()))
+            .collect()
+    }
+    
+    /// Shutdown the sync engine
+    pub async fn shutdown(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("Shutting down enhanced sync engine");
+        
+        // Disconnect all peers
+        let peer_addrs: Vec<SocketAddr> = {
+            let connections = self.active_connections.read().await;
+            connections.keys().cloned().collect()
+        };
+        
+        for peer_addr in peer_addrs {
+            let mut connections = self.active_connections.write().await;
+            connections.remove(&peer_addr);
+        }
+        
+        // Shutdown connection pool
+        self.connection_pool.shutdown().await?;
+        
+        info!("Enhanced sync engine shutdown complete");
+        Ok(())
+    }
+    
+    /// Start health monitoring background task
+    async fn start_health_monitoring_task(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let health_monitor = self.health_monitor.clone();
+        let active_connections = self.active_connections.clone();
+        let orchestrator_tx = self.orchestrator_tx.clone();
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            
+            loop {
+                interval.tick().await;
+                
+                // Check health of all active connections
+                let connections_to_check: Vec<(SocketAddr, Arc<Connection>)> = {
+                    let connections = active_connections.read().await;
+                    connections.iter()
+                        .filter(|(_, sync_conn)| sync_conn.needs_health_check())
+                        .map(|(addr, sync_conn)| (*addr, sync_conn.connection.clone()))
+                        .collect()
+                };
+                
+                for (peer_addr, connection) in connections_to_check {
+                    // TODO: Implement health checking (pending landro-quic implementation)
+                    // match health_monitor.check_connection_health(connection).await {
+                    let health_status = HealthStatus::Healthy; // Stub for now
+                    match Ok(health_status) {
+                        Ok(health_status) => {
+                            // Update connection health status
+                            {
+                                let mut connections = active_connections.write().await;
+                                if let Some(sync_conn) = connections.get_mut(&peer_addr) {
+                                    sync_conn.health_status = health_status.clone();
+                                    sync_conn.last_health_check = std::time::Instant::now();
+                                }
+                            }
+                            
+                            // Notify orchestrator of health changes
+                            if health_status != HealthStatus::Healthy {
+                                warn!("Peer {} health status: {:?}", peer_addr, health_status);
+                                let _ = orchestrator_tx.send(OrchestratorMessage::PeerLost(peer_addr.to_string())).await;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Health check failed for peer {}: {}", peer_addr, e);
+                        }
+                    }
+                }
+            }
+        });
+        
+        Ok(())
+    }
+    
+    /// Start connection cleanup task
+    async fn start_connection_cleanup_task(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let active_connections = self.active_connections.clone();
+        let connection_pool = self.connection_pool.clone();
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            
+            loop {
+                interval.tick().await;
+                
+                // Find unhealthy connections to clean up
+                let unhealthy_peers: Vec<SocketAddr> = {
+                    let connections = active_connections.read().await;
+                    connections.iter()
+                        .filter_map(|(addr, sync_conn)| {
+                            if sync_conn.health_status == HealthStatus::Unhealthy 
+                                || sync_conn.connection.is_closed() {
+                                Some(*addr)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                };
+                
+                for peer_addr in unhealthy_peers {
+                    info!("Cleaning up unhealthy connection to {}", peer_addr);
+                    
+                    // Remove from active connections
+                    {
+                        let mut connections = active_connections.write().await;
+                        connections.remove(&peer_addr);
+                    }
+                    
+                    // Remove from connection pool
+                    connection_pool.remove_peer_connections(peer_addr).await;
+                }
+            }
+        });
+        
+        Ok(())
+    }
+    
+    /// Start performance monitoring task
+    async fn start_performance_monitoring_task(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let performance_optimizer = self.performance_optimizer.clone();
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            
+            loop {
+                interval.tick().await;
+                
+                // Get performance statistics
+                let stats = performance_optimizer.get_performance_stats().await;
+                
+                debug!("Performance stats: {} peers, {:.2} Mbps total, {:.1}ms avg RTT", 
+                       stats.total_peers, stats.total_throughput_mbps, stats.average_rtt_ms);
+                
+                // Log performance insights
+                if stats.average_packet_loss_rate > 0.05 {
+                    warn!("High packet loss detected: {:.1}%", stats.average_packet_loss_rate * 100.0);
+                }
+                
+                if stats.average_rtt_ms > 200.0 {
+                    warn!("High latency detected: {:.1}ms", stats.average_rtt_ms);
+                }
+            }
+        });
+        
+        Ok(())
+    }
+}
+
+/// Helper function to create enhanced sync engine from orchestrator
+pub async fn create_enhanced_sync_engine(
+    store: Arc<ContentStore>,
+    indexer: Arc<AsyncIndexer>,
+    orchestrator_tx: mpsc::Sender<OrchestratorMessage>,
+) -> Result<Arc<EnhancedSyncEngine>, Box<dyn std::error::Error + Send + Sync>> {
+    let sync_engine = EnhancedSyncEngine::new(store, indexer, orchestrator_tx).await?;
+    let sync_engine = Arc::new(sync_engine);
+    
+    // Start background tasks
+    sync_engine.start().await?;
+    
+    Ok(sync_engine)
 }

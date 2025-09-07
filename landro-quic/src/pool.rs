@@ -12,6 +12,13 @@ use crate::client::QuicClient;
 use crate::connection::Connection;
 use crate::errors::{QuicError, Result};
 
+/// Statistics for connection pool health monitoring
+#[derive(Debug, Clone)]
+pub struct PoolStats {
+    pub total_connections: usize,
+    pub connections_per_peer: HashMap<SocketAddr, usize>,
+}
+
 /// Connection pool entry with metadata
 #[derive(Debug, Clone)]
 pub struct PooledConnection {
@@ -272,7 +279,7 @@ impl ConnectionPool {
     }
 
     /// Add connection to the pool
-    async fn add_to_pool(&self, peer_addr: SocketAddr, connection: Arc<Connection>) -> Result<()> {
+    pub async fn add_to_pool(&self, peer_addr: SocketAddr, connection: Arc<Connection>) -> Result<()> {
         let mut connections = self.connections.write().await;
         let pooled_conn = PooledConnection::new(connection, peer_addr);
 
@@ -331,6 +338,30 @@ impl ConnectionPool {
         tokio::spawn(async move {
             *handle_mutex.lock().await = Some(handle);
         });
+    }
+
+    /// Get pool statistics for health monitoring  
+    pub async fn get_pool_stats(&self) -> PoolStats {
+        let connections = self.connections.read().await;
+        let mut stats = PoolStats {
+            total_connections: 0,
+            connections_per_peer: std::collections::HashMap::new(),
+        };
+        
+        for (addr, conns) in connections.iter() {
+            stats.connections_per_peer.insert(*addr, conns.len());
+            stats.total_connections += conns.len();
+        }
+        
+        stats
+    }
+
+    /// Remove all connections for a specific peer (used during recovery)
+    pub async fn remove_peer_connections(&self, peer_addr: std::net::SocketAddr) {
+        let mut connections = self.connections.write().await;
+        if let Some(removed) = connections.remove(&peer_addr) {
+            info!("Removed {} unhealthy connections for peer {}", removed.len(), peer_addr);
+        }
     }
 }
 

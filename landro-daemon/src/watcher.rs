@@ -6,6 +6,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
+use crate::security;
+
 /// File system change event
 #[derive(Debug, Clone)]
 pub struct FileEvent {
@@ -52,6 +54,11 @@ impl FileWatcher {
         let (tx, rx) = mpsc::channel();
         let path = self.path.clone();
         let running = self.running.clone();
+        
+        // Security check: Don't watch sensitive system directories
+        if security::is_sensitive_path(&path) {
+            return Err("Cannot watch sensitive system directory".into());
+        }
 
         // Create notify watcher
         let mut watcher =

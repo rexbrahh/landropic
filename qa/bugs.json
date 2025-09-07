@@ -1,0 +1,83 @@
+{
+  "bugs": [
+    {
+      "id": "BUG-001",
+      "severity": "critical",
+      "component": "quic",
+      "title": "ConnectionHealthMonitor import name collision",
+      "description": "ConnectionHealthMonitor is imported from both health_monitor and recovery modules, causing a name collision.",
+      "file": "landro-quic/src/lib.rs:173",
+      "error_code": "E0252",
+      "reproduction": "Run 'cargo test -p landro-quic'",
+      "expected": "Clean compilation without name conflicts",
+      "actual": "Compilation error: ConnectionHealthMonitor defined multiple times",
+      "fix_suggestion": "Rename one import: 'ConnectionHealthMonitor as RecoveryHealthMonitor'",
+      "blocking_release": true
+    },
+    {
+      "id": "BUG-002", 
+      "severity": "critical",
+      "component": "quic",
+      "title": "SendStream mutable borrow through shared reference",
+      "description": "Multiple locations attempt to borrow SendStream mutably through a shared reference after incorrect .clone() calls.",
+      "file": "landro-quic/src/stream_multiplexer.rs:219,222,224,241",
+      "error_code": "E0596",
+      "reproduction": "Run 'cargo test -p landro-quic'", 
+      "expected": "SendStream should be properly borrowed for writing",
+      "actual": "Cannot borrow *send_stream as mutable, as it is behind a & reference",
+      "fix_suggestion": "Remove .clone() calls and properly pass &mut SendStream or use Arc<Mutex<SendStream>>",
+      "blocking_release": true
+    },
+    {
+      "id": "BUG-003",
+      "severity": "critical", 
+      "component": "quic",
+      "title": "Private field access in ConnectionPool",
+      "description": "HealthMonitor attempts to access private 'connections' field of ConnectionPool directly.",
+      "file": "landro-quic/src/health_monitor.rs:372,387",
+      "error_code": "E0616", 
+      "reproduction": "Run 'cargo test -p landro-quic'",
+      "expected": "Access connections through public API",
+      "actual": "field `connections` of struct `ConnectionPool` is private",
+      "fix_suggestion": "Add public getter methods to ConnectionPool or make field public",
+      "blocking_release": true
+    },
+    {
+      "id": "BUG-004",
+      "severity": "critical",
+      "component": "quic", 
+      "title": "Use of moved value in async task spawning",
+      "description": "peer_id is moved into async closure but then used again after the move.",
+      "file": "landro-quic/src/health_monitor.rs:345",
+      "error_code": "E0382",
+      "reproduction": "Run 'cargo test -p landro-quic'",
+      "expected": "peer_id should be available for both async task and HashMap insertion",
+      "actual": "use of moved value: `peer_id`",
+      "fix_suggestion": "Clone peer_id before moving: let peer_id_clone = peer_id.clone(); then use in async block",
+      "blocking_release": true
+    },
+    {
+      "id": "BUG-005",
+      "severity": "high",
+      "component": "all",
+      "title": "Excessive compiler warnings (55 total)",
+      "description": "Large number of unused imports, variables, and dead code warnings across all packages.",
+      "reproduction": "Run 'cargo test --all'",
+      "expected": "Clean compilation with minimal warnings",
+      "actual": "55 warnings: 25 unused imports, 8 unused variables, 12 dead code",
+      "fix_suggestion": "Run 'cargo fix --lib --allow-dirty' to auto-fix most issues",
+      "blocking_release": false,
+      "notes": "Code quality issue - should be addressed before release"
+    }
+  ],
+
+  "summary": {
+    "total_bugs": 5,
+    "critical": 4,
+    "high": 1,
+    "blocking_release": 4,
+    "estimated_fix_time": "1-2 hours",
+    "primary_blocker": "landro-quic has 11 compilation errors (4 mutable reference, 2 duplicate methods, 1 missing dependency, 4 config fields)",
+    "update": "2025-09-07T01:50:00Z - Detailed analysis reveals 11 specific compilation errors with clear fix instructions"
+  }
+}

@@ -1,0 +1,322 @@
+{
+  "version": "0.1.0",
+  "description": "Landropic Content-Addressed Storage (CAS) API",
+  "last_updated": "2025-01-06",
+  "endpoints": {
+    "write_stream": {
+      "description": "Stream write operation that doesn't load full chunk into memory",
+      "input": {
+        "reader": "AsyncRead stream",
+        "expected_hash": "Optional<ContentHash>"
+      },
+      "output": "Result<ObjectRef>",
+      "streaming": true,
+      "performance": {
+        "memory": "O(buffer_size)",
+        "throughput": "100MB/s+"
+      }
+    },
+    "start_resumable_write": {
+      "description": "Start a resumable write operation for interrupted transfers",
+      "input": {
+        "expected_hash": "Optional<ContentHash>",
+        "total_size": "Optional<u64>"
+      },
+      "output": "Result<PartialTransfer>",
+      "resumable": true,
+      "performance": {
+        "memory": "O(1)",
+        "latency": "<1ms"
+      }
+    },
+    "continue_resumable_write": {
+      "description": "Continue writing to a partial transfer from a reader",
+      "input": {
+        "partial": "&mut PartialTransfer",
+        "reader": "AsyncRead stream"
+      },
+      "output": "Result<()>",
+      "resumable": true,
+      "streaming": true,
+      "performance": {
+        "memory": "O(buffer_size)",
+        "throughput": "100MB/s+"
+      }
+    },
+    "complete_resumable_write": {
+      "description": "Complete a resumable write operation with integrity verification",
+      "input": {
+        "partial": "PartialTransfer"
+      },
+      "output": "Result<ObjectRef>",
+      "resumable": true,
+      "verification": "Hash and size validation",
+      "performance": {
+        "memory": "O(buffer_size)",
+        "latency": "Depends on file size for verification"
+      }
+    },
+    "cancel_resumable_write": {
+      "description": "Cancel a resumable write operation and clean up temp files",
+      "input": {
+        "partial": "PartialTransfer"
+      },
+      "output": "Result<()>",
+      "resumable": true,
+      "cleanup": true
+    },
+    "cleanup_expired_partials": {
+      "description": "Clean up expired partial transfers (maintenance operation)",
+      "input": {},
+      "output": "Result<usize>",
+      "maintenance": true,
+      "performance": {
+        "frequency": "Hourly recommended"
+      }
+    },
+    "read_stream": {
+      "description": "Stream read operation that returns an async reader",
+      "input": {
+        "hash": "ContentHash"
+      },
+      "output": "Result<Box<dyn AsyncRead>>",
+      "streaming": true,
+      "performance": {
+        "memory": "O(buffer_size)",
+        "throughput": "200MB/s+"
+      }
+    },
+    "write_batch": {
+      "description": "Write multiple chunks in a single batch for improved performance",
+      "input": {
+        "chunks": "Vec<(&[u8], Option<ContentHash>)>"
+      },
+      "output": "Result<Vec<ObjectRef>>",
+      "max_batch": 1000,
+      "concurrency": "Controlled by semaphore",
+      "performance": {
+        "throughput": "1000 chunks/sec"
+      }
+    },
+    "write_batch_stream": {
+      "description": "Write multiple chunks using streaming to avoid memory load",
+      "input": {
+        "chunks": "Iterator<(AsyncRead, Option<ContentHash>)>"
+      },
+      "output": "Result<Vec<ObjectRef>>",
+      "streaming": true,
+      "concurrency": "Controlled by semaphore",
+      "performance": {
+        "memory": "O(buffer_size * concurrent_ops)",
+        "throughput": "1000+ chunks/sec"
+      }
+    },
+    "write": {
+      "description": "Legacy write operation (loads full chunk)",
+      "input": {
+        "data": "&[u8]"
+      },
+      "output": "Result<ObjectRef>",
+      "streaming": false,
+      "performance": {
+        "memory": "O(chunk_size)",
+        "throughput": "50MB/s"
+      }
+    },
+    "read": {
+      "description": "Legacy read operation (loads full chunk)",
+      "input": {
+        "hash": "&ContentHash"
+      },
+      "output": "Result<Bytes>",
+      "streaming": false,
+      "performance": {
+        "memory": "O(chunk_size)",
+        "throughput": "100MB/s"
+      }
+    },
+    "exists": {
+      "description": "Check if object exists in storage",
+      "input": {
+        "hash": "&ContentHash"
+      },
+      "output": "bool",
+      "performance": {
+        "latency": "<0.5ms"
+      }
+    },
+    "verify": {
+      "description": "Verify object integrity by checking hash",
+      "input": {
+        "hash": "&ContentHash"
+      },
+      "output": "Result<bool>",
+      "performance": {
+        "latency": "Depends on chunk size"
+      }
+    },
+    "delete": {
+      "description": "Delete object from store (use with caution)",
+      "input": {
+        "hash": "&ContentHash"
+      },
+      "output": "Result<()>",
+      "warning": "Multiple references may point to same object"
+    },
+    "flush_batch": {
+      "description": "Flush pending batch writes",
+      "input": {},
+      "output": "Result<()>",
+      "performance": {
+        "latency": "Depends on pending batch size"
+      }
+    }
+  },
+  "configuration": {
+    "fsync_policy": {
+      "options": ["Always", "Batch(n)", "Async", "Never"],
+      "default": "Always",
+      "description": "Control write durability vs performance"
+    },
+    "compression": {
+      "options": ["None", "Lz4", "Zstd", "Snappy"],
+      "default": "None",
+      "description": "Compression algorithm for storage"
+    },
+    "cache_config": {
+      "max_chunks": {
+        "type": "usize",
+        "default": 1000,
+        "description": "Maximum number of cached chunks"
+      },
+      "max_size_bytes": {
+        "type": "u64",
+        "default": "64MB",
+        "description": "Maximum total size of cached data"
+      },
+      "ttl_seconds": {
+        "type": "u64",
+        "default": 300,
+        "description": "Cache TTL in seconds"
+      },
+      "adaptive_caching": {
+        "type": "bool",
+        "default": false,
+        "description": "Enable adaptive caching based on access patterns"
+      }
+    },
+    "batch_config": {
+      "enable_batch_ops": {
+        "type": "bool",
+        "default": true,
+        "description": "Enable batch operations"
+      },
+      "max_concurrent_ops": {
+        "type": "usize",
+        "default": 32,
+        "description": "Maximum concurrent operations"
+      },
+      "batch_size": {
+        "type": "usize",
+        "default": 100,
+        "description": "Maximum batch size before auto-flush"
+      },
+      "batch_timeout_ms": {
+        "type": "u64",
+        "default": 100,
+        "description": "Maximum time before auto-flush"
+      }
+    }
+  },
+  "storage_structure": {
+    "sharding": {
+      "description": "Objects are sharded by hash prefix for filesystem performance",
+      "levels": 2,
+      "chars_per_level": 2,
+      "example": "hash: abc123... -> path: ab/c1/abc123..."
+    },
+    "temp_directory": {
+      "path": ".tmp/",
+      "description": "Temporary files for atomic writes"
+    },
+    "packfiles": {
+      "enabled": false,
+      "description": "Small object packing (disabled in v1.0)"
+    }
+  },
+  "database_indexes": {
+    "files": [
+      "idx_files_path",
+      "idx_files_content_hash",
+      "idx_files_modified_at",
+      "idx_files_size",
+      "idx_files_hash_size (compound)"
+    ],
+    "chunks": [
+      "idx_chunks_hash",
+      "idx_chunks_ref_count",
+      "idx_chunks_size",
+      "idx_chunks_hash_size (compound)"
+    ],
+    "partial_transfers": [
+      "idx_partial_transfers_temp_path",
+      "idx_partial_transfers_expected_hash",
+      "idx_partial_transfers_expires_at"
+    ],
+    "optimizations": [
+      "WAL mode for concurrency",
+      "64MB cache size",
+      "256MB mmap size",
+      "Memory temp store"
+    ]
+  },
+  "resumable_operations": {
+    "description": "Support for interrupted transfer recovery",
+    "features": [
+      "Partial file storage with temp files",
+      "Hash state preservation across interruptions",
+      "Automatic integrity verification on completion",
+      "Configurable expiration (default 24h)",
+      "Garbage collection of orphaned partials"
+    ],
+    "use_cases": [
+      "Network interrupted file transfers",
+      "Large file uploads over unreliable connections",
+      "Background sync processes",
+      "Mobile app sync with connection drops"
+    ],
+    "workflow": {
+      "1": "start_resumable_write() -> PartialTransfer",
+      "2": "continue_resumable_write(partial, reader) -> ()",
+      "3": "complete_resumable_write(partial) -> ObjectRef",
+      "alternative": "cancel_resumable_write(partial) for cleanup"
+    },
+    "limitations": [
+      "Hash state serialization not yet implemented (rebuilds on resume)",
+      "24-hour expiration for partial transfers",
+      "Requires periodic cleanup_expired_partials() calls"
+    ]
+  },
+  "performance_targets": {
+    "alpha_release": {
+      "chunk_write": "100MB/s+",
+      "chunk_read": "200MB/s+",
+      "index_lookup": "<0.5ms",
+      "batch_operations": "1000 chunks/sec",
+      "memory_usage": "O(buffer_size) for streaming"
+    },
+    "current_baseline": {
+      "chunk_write": "~50MB/s",
+      "chunk_read": "~100MB/s",
+      "index_lookup": "~1ms",
+      "batch_operations": "100 chunks/sec",
+      "memory_usage": "O(chunk_size) for legacy"
+    }
+  },
+  "integration_notes": {
+    "sync_engine": "Use streaming APIs for network transfers",
+    "chunker": "FastCDC provides chunk boundaries",
+    "network": "Coordinate buffer sizes with QUIC transport",
+    "daemon": "Use batch operations for manifest sync"
+  }
+}

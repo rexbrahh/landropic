@@ -1840,6 +1840,7 @@ dependencies = [
  "lz4_flex",
  "memmap2",
  "proptest",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "snap",
@@ -1847,6 +1848,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-test",
  "uuid",
  "zstd",
 ]
@@ -1923,7 +1925,9 @@ dependencies = [
 name = "landro-daemon"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bincode",
+ "blake3",
  "bytes",
  "dirs",
  "futures",
@@ -1942,6 +1946,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "siphasher",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -2007,6 +2012,7 @@ dependencies = [
  "chrono",
  "criterion",
  "ed25519-dalek",
+ "fastrand",
  "futures",
  "hex",
  "landro-cas",
@@ -2037,6 +2043,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "blake3",
+ "bytes",
  "chrono",
  "futures",
  "hex",
@@ -2045,6 +2052,7 @@ dependencies = [
  "landro-chunker",
  "landro-index",
  "landro-proto",
+ "landro-quic",
  "priority-queue",
  "prost",
  "prost-types",
@@ -2056,6 +2064,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3869,6 +3878,27 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "tracing-test"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "557b891436fe0d5e0e363427fc7f217abf9ccd510d5136549847bdcbcd011d68"
+dependencies = [
+ "tracing-core",
+ "tracing-subscriber",
+ "tracing-test-macro",
+]
+
+[[package]]
+name = "tracing-test-macro"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04659ddb06c87d233c566112c1c9c5b9e98256d9af50ec3bc9c8327f873a7568"
+dependencies = [
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]

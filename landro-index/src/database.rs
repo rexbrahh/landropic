@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -8,7 +9,7 @@ use crate::manifest::Manifest;
 use crate::schema::{SCHEMA, SCHEMA_VERSION};
 
 /// File entry in the database
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
     pub id: Option<i64>,
     pub path: String,
