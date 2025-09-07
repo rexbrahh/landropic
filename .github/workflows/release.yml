@@ -44,4 +44,8 @@ jobs:
         with:
           files: landropic-macos-*.tar.gz
           draft: false
-          prerelease: false
+          prerelease: true
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
