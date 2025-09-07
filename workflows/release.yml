@@ -1,0 +1,51 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install protoc
+        run: |
+          brew install protobuf
+      
+      - name: Build release
+        run: |
+          export RUSTC_WRAPPER=""
+          export CARGO_BUILD_JOBS=4
+          cargo build --release -p landro-daemon --bin landro-daemon
+          cargo build --release -p landro-cli --bin landro
+      
+      - name: Create release archive
+        run: |
+          mkdir -p release
+          cp target/release/landro-daemon release/
+          cp target/release/landro release/
+          cp README.md release/
+          tar -czf landropic-macos-${GITHUB_REF_NAME}.tar.gz -C release .
+      
+      - name: Upload to release
+        uses: actions/upload-artifact@v4
+        with:
+          name: landropic-macos
+          path: landropic-macos-*.tar.gz
+      
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: landropic-macos-*.tar.gz
+          draft: false
+          prerelease: true
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

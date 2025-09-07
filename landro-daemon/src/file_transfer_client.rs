@@ -106,7 +106,7 @@ mod tests {
     async fn test_file_transfer_preparation() {
         // Create a temporary file for testing
         let mut temp_file = NamedTempFile::new().unwrap();
-        temp_file.write_all(b"Hello, World!").await.unwrap();
+        std::io::Write::write_all(&mut temp_file, b"Hello, World!").unwrap();
         let temp_path = temp_file.path().to_path_buf();
         
         // Verify file exists and can be read

@@ -1,0 +1,134 @@
+name: Nix CI
+on:
+  # Temporarily disabled - Nix builds taking too long on macOS CI
+  # Re-enable when Nix caching is properly configured
+  workflow_dispatch:  # Manual trigger only for now
+  # push:
+  #   branches: [main]
+  #   tags: ['v*']
+  # pull_request:
+  #   branches: [main]
+
+jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45  # Increase timeout for macOS
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      
+      - name: Setup Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+      
+      # Cachix disabled - not using binary cache
+      # To enable: add CACHIX_AUTH_TOKEN secret and uncomment
+      # - name: Setup Cachix
+      #   uses: cachix/cachix-action@v14
+      #   with:
+      #     name: landropic
+      #     authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      
+      - name: Check Nix flake
+        run: nix flake check -L
+      
+      - name: Build packages
+        run: |
+          nix build -L
+          nix build .#docker -L
+      
+      - name: Run tests
+        run: nix develop .#ci -c cargo test
+      
+      - name: Check formatting
+        run: |
+          nix develop .#ci -c cargo fmt --check
+          nix develop .#ci -c nixpkgs-fmt --check .
+      
+      - name: Run clippy
+        run: nix develop .#ci -c cargo clippy -- -D warnings
+      
+      # Push to Cachix disabled - no auth token configured
+      # - name: Push to Cachix
+      #   if: github.ref == 'refs/heads/main'
+      #   run: |
+      #     nix build --json | jq -r '.[].outputs.out' | cachix push landropic
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-linux
+          - os: ubuntu-latest
+            target: aarch64-linux
+          - os: macos-latest
+            target: x86_64-darwin
+          - os: macos-latest
+            target: aarch64-darwin
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      
+      - name: Setup Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+      
+      - name: Build for ${{ matrix.target }}
+        run: |
+          nix build .#packages.${{ matrix.target }}.landropic -L
+          nix build .#packages.${{ matrix.target }}.landropic-static -L || true
+      
+      - name: Create tarball
+        run: |
+          mkdir -p dist
+          cp -r result/bin dist/
+          tar -czf landropic-${{ matrix.target }}-${GITHUB_REF_NAME}.tar.gz -C dist .
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: landropic-${{ matrix.target }}
+          path: landropic-*.tar.gz
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: landropic-*.tar.gz
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') }}
+
+  docker:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      
+      - name: Build Docker image
+        run: |
+          nix build .#docker -L
+          cp result docker-image.tar.gz
+      
+      - name: Load and push to Docker Hub
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          docker load < docker-image.tar.gz
+          echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+          docker tag landropic:latest $DOCKER_USERNAME/landropic:${GITHUB_REF_NAME}
+          docker tag landropic:latest $DOCKER_USERNAME/landropic:latest
+          docker push $DOCKER_USERNAME/landropic:${GITHUB_REF_NAME}
+          docker push $DOCKER_USERNAME/landropic:latest

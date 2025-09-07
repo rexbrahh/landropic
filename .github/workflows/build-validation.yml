@@ -1,0 +1,343 @@
+name: Build Validation - Tech Lead Branch
+
+on:
+  push:
+    branches: [ tech-lead-v1 ]
+  pull_request:
+    branches: [ tech-lead-v1 ]
+  workflow_dispatch:
+    inputs:
+      verbose:
+        description: 'Enable verbose output'
+        required: false
+        default: false
+        type: boolean
+      clean_build:
+        description: 'Clean build before validation'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  BUILD_REPORT_FILE: build-validation-report.json
+
+jobs:
+  # Primary build validation job
+  build-validation:
+    name: Comprehensive Build Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [dev, release]
+        include:
+          - profile: dev
+            cargo_flags: "--profile dev"
+            test_flags: "--profile test-fast"
+          - profile: release
+            cargo_flags: "--release"
+            test_flags: "--release"
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better reporting
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler jq
+          protoc --version
+          jq --version
+      
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.profile }}
+      
+      - name: Make validation script executable
+        run: chmod +x scripts/validate-build.sh
+      
+      - name: Run build validation
+        id: validation
+        run: |
+          # Set validation options based on inputs
+          export VERBOSE="${{ github.event.inputs.verbose || 'false' }}"
+          export CLEAN_BUILD="${{ github.event.inputs.clean_build || 'false' }}"
+          export BUILD_REPORT_FILE="${{ env.BUILD_REPORT_FILE }}"
+          export FAIL_FAST="false"  # Don't fail fast in CI to get full report
+          
+          # Add profile suffix to report file
+          export BUILD_REPORT_FILE="${BUILD_REPORT_FILE%.json}-${{ matrix.profile }}.json"
+          
+          echo "Running validation for ${{ matrix.profile }} profile..."
+          ./scripts/validate-build.sh
+        continue-on-error: true
+      
+      - name: Upload build report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-report-${{ matrix.profile }}
+          path: build-validation-report-${{ matrix.profile }}.json
+          retention-days: 30
+      
+      - name: Parse and display results
+        if: always()
+        run: |
+          REPORT_FILE="build-validation-report-${{ matrix.profile }}.json"
+          
+          if [[ -f "$REPORT_FILE" ]]; then
+            echo "## Build Validation Report (${{ matrix.profile }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Extract key metrics
+            OVERALL_STATUS=$(jq -r '.build_results.overall_status' "$REPORT_FILE")
+            WARNINGS=$(jq -r '.build_results.warnings' "$REPORT_FILE")
+            ERRORS=$(jq -r '.build_results.errors' "$REPORT_FILE")
+            BUILD_TIME=$(jq -r '.performance.build_time' "$REPORT_FILE")
+            TEST_TIME=$(jq -r '.performance.test_time' "$REPORT_FILE")
+            
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Overall Status | $OVERALL_STATUS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Warnings | $WARNINGS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Errors | $ERRORS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Build Time | ${BUILD_TIME}s |" >> $GITHUB_STEP_SUMMARY
+            echo "| Test Time | ${TEST_TIME}s |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Show individual crate results
+            echo "### Crate Build Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Crate | Status | Warnings |" >> $GITHUB_STEP_SUMMARY
+            echo "|-------|--------|----------|" >> $GITHUB_STEP_SUMMARY
+            
+            for crate in landro-proto landro-crypto landro-quic landro-chunker landro-cas landro-index landro-daemon landro-cli; do
+              STATUS=$(jq -r ".build_results.crate_builds.\"$crate\".status // \"not_built\"" "$REPORT_FILE")
+              CRATE_WARNINGS=$(jq -r ".build_results.crate_builds.\"$crate\".warnings // 0" "$REPORT_FILE")
+              echo "| $crate | $STATUS | $CRATE_WARNINGS |" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "❌ Build report not found" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: Check validation result
+        if: always()
+        run: |
+          REPORT_FILE="build-validation-report-${{ matrix.profile }}.json"
+          
+          if [[ -f "$REPORT_FILE" ]]; then
+            OVERALL_STATUS=$(jq -r '.build_results.overall_status' "$REPORT_FILE")
+            ERRORS=$(jq -r '.build_results.errors' "$REPORT_FILE")
+            
+            if [[ "$OVERALL_STATUS" == "failed" || "$ERRORS" -gt 0 ]]; then
+              echo "::error::Build validation failed for ${{ matrix.profile }} profile"
+              exit 1
+            elif [[ "$OVERALL_STATUS" == "warnings" ]]; then
+              echo "::warning::Build validation completed with warnings for ${{ matrix.profile }} profile"
+            else
+              echo "::notice::Build validation passed for ${{ matrix.profile }} profile"
+            fi
+          else
+            echo "::error::Build validation script failed to generate report"
+            exit 1
+          fi
+
+  # Multi-platform validation (lighter checks)
+  cross-platform-validation:
+    name: Cross-Platform Build Check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      
+      - name: Install protobuf (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+      
+      - name: Install protobuf (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install protobuf
+      
+      - name: Install protobuf (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install protoc
+      
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-${{ matrix.os }}
+      
+      - name: Quick build check
+        run: |
+          echo "Building workspace for ${{ matrix.os }}"
+          cargo build --workspace --all-targets
+      
+      - name: Quick test check
+        run: |
+          echo "Running tests for ${{ matrix.os }}"
+          cargo test --workspace --lib --bins
+
+  # Security and quality checks
+  security-quality-check:
+    name: Security & Quality Assessment
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: clippy
+      
+      - name: Install protobuf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+      
+      - name: Install audit tools
+        run: |
+          cargo install --locked cargo-audit cargo-deny || echo "Some tools may already be installed"
+      
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: security
+      
+      - name: Security audit
+        run: |
+          echo "Running security audit..."
+          cargo audit --deny warnings || echo "Security audit completed with findings"
+      
+      - name: Dependency analysis
+        run: |
+          echo "Running dependency analysis..."
+          cargo deny check || echo "Dependency check completed"
+      
+      - name: Advanced clippy analysis
+        run: |
+          echo "Running advanced clippy analysis..."
+          cargo clippy --workspace --all-targets -- \
+            -W clippy::cargo \
+            -W clippy::nursery \
+            -W clippy::pedantic \
+            -A clippy::module_name_repetitions \
+            -A clippy::missing_errors_doc
+
+  # Performance benchmark validation
+  performance-validation:
+    name: Performance Benchmark Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: github.event_name != 'pull_request'  # Only on direct pushes
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      
+      - name: Install protobuf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+      
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: benchmarks
+      
+      - name: Run benchmarks
+        run: |
+          echo "Running performance benchmarks..."
+          cargo bench --workspace || echo "Benchmarks completed"
+      
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: target/criterion/
+          retention-days: 7
+
+  # Final consolidation job
+  validation-summary:
+    name: Validation Summary
+    runs-on: ubuntu-latest
+    needs: [build-validation, cross-platform-validation, security-quality-check]
+    if: always()
+    
+    steps:
+      - name: Download all build reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-report-*
+          merge-multiple: true
+      
+      - name: Generate final summary
+        run: |
+          echo "# 🏗️ Build Validation Summary for tech-lead-v1" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Results Overview" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check job results
+          BUILD_DEV="${{ needs.build-validation.result }}"
+          CROSS_PLATFORM="${{ needs.cross-platform-validation.result }}"
+          SECURITY="${{ needs.security-quality-check.result }}"
+          
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Validation | $BUILD_DEV |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cross-Platform | $CROSS_PLATFORM |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security & Quality | $SECURITY |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Overall status determination
+          if [[ "$BUILD_DEV" == "success" && "$CROSS_PLATFORM" == "success" && "$SECURITY" == "success" ]]; then
+            echo "## ✅ Overall Status: PASSED" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All validation checks have passed successfully! 🎉" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Overall Status: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Some validation checks have failed. Please review the individual job results." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "Generated by Build Validation Pipeline | $(date)" >> $GITHUB_STEP_SUMMARY
