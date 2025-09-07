@@ -17,13 +17,14 @@ jobs:
         run: |
           export RUSTC_WRAPPER=""
           export CARGO_BUILD_JOBS=4
-          cargo build --release --bin landro-daemon --bin landro-cli
+          cargo build --release -p landro-daemon --bin landro-daemon
+          cargo build --release -p landro-cli --bin landro
       
       - name: Create release archive
         run: |
           mkdir -p release
           cp target/release/landro-daemon release/
-          cp target/release/landro-cli release/
+          cp target/release/landro release/
           cp README.md release/
           tar -czf landropic-macos-${GITHUB_REF_NAME}.tar.gz -C release .
       
