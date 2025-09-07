@@ -87,14 +87,16 @@ impl BloomSyncEngine {
         indexer: Arc<AsyncIndexer>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let diff_handler = Arc::new(DiffProtocolHandler::new(device_id.clone()));
-        let diff_computer = Arc::new(DiffComputer::new());
+        let chunk_cache = Arc::new(std::collections::HashSet::new());
+        let diff_computer = Arc::new(DiffComputer::new(chunk_cache));
         
         Ok(Self {
             diff_handler,
-            quic_transport: Arc::new(QuicSyncTransport::new(
-                Arc::new(Connection::placeholder()), // Will be set per session
-                cas.clone(),
-            ).await?),
+            quic_transport: {
+                // TODO: Create proper connection from daemon's client
+                // For now, defer QUIC transport creation until we have a real connection
+                todo!("QuicSyncTransport needs actual connection from daemon client")
+            },
             diff_computer,
             cas,
             indexer,
@@ -346,8 +348,9 @@ impl BloomSyncEngine {
         // Update final stats
         let mut sessions = self.active_syncs.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
-            session.stats.traditional_stats.bytes_transferred = transfer_result.bytes_transferred;
-            session.stats.traditional_stats.files_transferred = transfer_result.files_transferred as u64;
+            // Update traditional stats with correct field names
+            session.stats.traditional_stats.bytes_sent += transfer_result.bytes_transferred;
+            session.stats.traditional_stats.files_added += transfer_result.files_transferred;
             session.stats.bandwidth_savings.actual_bytes_transferred = transfer_result.bytes_transferred;
             
             // Calculate final efficiency metrics
@@ -357,8 +360,8 @@ impl BloomSyncEngine {
             
             info!("📈 Final stats for {}: {} files, {} bytes, {:.2}s, {:.1}% bandwidth saved", 
                 session_id,
-                session.stats.traditional_stats.files_transferred,
-                session.stats.traditional_stats.bytes_transferred,
+                session.stats.traditional_stats.files_added,
+                session.stats.traditional_stats.bytes_sent,
                 total_time,
                 session.stats.bandwidth_savings.total_savings_percent
             );

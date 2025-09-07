@@ -223,7 +223,7 @@ pub struct DiffProgress {
     pub estimated_completion: Option<SystemTime>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum DiffStage {
     Initializing,
     ExchangingSummaries,

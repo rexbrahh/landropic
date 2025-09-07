@@ -124,7 +124,7 @@ struct SessionProgress {
 }
 
 #[derive(Debug)]
-enum ProgressCommand {
+pub enum ProgressCommand {
     UpdateStage(ProgressStage),
     UpdateProgress(u8),
     UpdateTransferStats(CliTransferStats),
@@ -228,8 +228,8 @@ impl CliProgressApi {
         if let Some(session) = sessions.get_mut(session_id) {
             // Update transfer stats
             session.current_progress.transfer_stats = CliTransferStats {
-                files_total: enhanced_stats.traditional_stats.files_added + enhanced_stats.traditional_stats.files_modified,
-                files_completed: enhanced_stats.traditional_stats.files_added + enhanced_stats.traditional_stats.files_modified,
+                files_total: (enhanced_stats.traditional_stats.files_added + enhanced_stats.traditional_stats.files_modified) as u64,
+                files_completed: (enhanced_stats.traditional_stats.files_added + enhanced_stats.traditional_stats.files_modified) as u64,
                 files_failed: 0, // TODO: Get from error stats
                 bytes_total: enhanced_stats.traditional_stats.bytes_sent + enhanced_stats.traditional_stats.bytes_received,
                 bytes_transferred: enhanced_stats.traditional_stats.bytes_sent + enhanced_stats.traditional_stats.bytes_received,
@@ -249,7 +249,7 @@ impl CliProgressApi {
             };
             
             // Update general progress
-            session.current_progress.stage = stage;
+            session.current_progress.stage = stage.clone();
             session.current_progress.progress_percent = progress_percent;
             session.current_progress.timestamp = SystemTime::now();
             session.current_progress.eta_seconds = self.calculate_eta(session);

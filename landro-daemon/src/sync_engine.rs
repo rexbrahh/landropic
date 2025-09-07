@@ -73,7 +73,10 @@ impl EnhancedSyncEngine {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Create QUIC client for outbound connections
         let client_config = QuicConfig::file_sync_optimized();
-        let client = Arc::new(QuicClient::new(client_config).await?);
+        // TODO: Get proper identity and verifier from daemon config
+        let identity = Arc::new(landro_crypto::identity::DeviceIdentity::generate("landropic-daemon")?);  // TODO: Get device name from config
+        let verifier = Arc::new(landro_crypto::certificate::CertificateVerifier::new(vec![])); // TODO: Load trusted device IDs from config
+        let client = Arc::new(QuicClient::new(identity, verifier, client_config).await?);
         
         // Create connection pool with health monitoring
         let pool_config = landro_quic::PoolConfig {
@@ -95,17 +98,21 @@ impl EnhancedSyncEngine {
             enable_auto_recovery: true,
             recovery_timeout: Duration::from_secs(60),
         };
-        let health_monitor = Arc::new(ConnectionHealthMonitor::new(health_config));
+        let health_monitor = Arc::new(ConnectionHealthMonitor::new(connection_pool.clone(), health_config));
         
         // Create reconnection management
         let reconnection_config = ReconnectionConfig {
-            max_attempts: 5,
-            base_delay: Duration::from_secs(1),
-            max_delay: Duration::from_secs(60),
-            jitter_factor: 0.1,
+            initial_retry_delay: Duration::from_secs(1),
+            max_retry_delay: Duration::from_secs(60),
+            backoff_multiplier: 2.0,
+            max_retry_attempts: 5,
+            connection_timeout: Duration::from_secs(15),
+            health_check_interval: Duration::from_secs(30),
+            enable_jitter: true,
         };
         let reconnection_manager = Arc::new(ReconnectionManager::new(
             connection_pool.clone(),
+            client.clone(),
             reconnection_config,
         ));
         
@@ -245,7 +252,7 @@ impl EnhancedSyncEngine {
                     // TODO: Implement health checking (pending landro-quic implementation)
                     // match health_monitor.check_connection_health(connection).await {
                     let health_status = HealthStatus::Healthy; // Stub for now
-                    match Ok(health_status) {
+                    match Ok::<landro_quic::HealthStatus, Box<dyn std::error::Error + Send + Sync>>(health_status) {
                         Ok(health_status) => {
                             // Update connection health status
                             {

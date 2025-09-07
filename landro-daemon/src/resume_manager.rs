@@ -272,7 +272,7 @@ impl ResumeManager {
             
             match update {
                 CheckpointUpdate::Stage(stage) => {
-                    checkpoint.stage = stage;
+                    checkpoint.stage = stage.clone();
                     match stage {
                         DiffStage::ExchangingSummaries => {
                             checkpoint.manifests_exchanged = true;
@@ -291,7 +291,7 @@ impl ResumeManager {
                 }
                 CheckpointUpdate::ChunkTransferred(chunk_hash) => {
                     if !checkpoint.chunks_transferred.contains(&chunk_hash) {
-                        checkpoint.chunks_transferred.push(chunk_hash);
+                        checkpoint.chunks_transferred.push(chunk_hash.clone());
                         checkpoint.chunks_failed.retain(|h| h != &chunk_hash);
                     }
                 }

@@ -183,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize Day 2 Enhanced Sync Engine
     info!("Initializing enhanced Bloom sync engine");
     let enhanced_sync = Arc::new(BloomSyncEngine::new(
-        identity.device_id(),
+        identity.device_id().to_string(),
         store.clone(),
         indexer.clone(),
     ).await?);

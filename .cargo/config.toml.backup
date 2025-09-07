@@ -1,5 +1,7 @@
 # Build configuration without sccache
 [build]
+# Remove sccache wrapper completely
+jobs = 4
 
 # Keep other optimizations
 [target.x86_64-apple-darwin]

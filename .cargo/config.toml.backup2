@@ -1,5 +1,6 @@
 # Build configuration without sccache
 [build]
+# jobs = 4  # Remove to use default
 
 # Keep other optimizations
 [target.x86_64-apple-darwin]
