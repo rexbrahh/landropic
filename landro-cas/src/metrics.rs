@@ -11,28 +11,28 @@ use tokio::sync::RwLock;
 pub struct StorageMetrics {
     /// Timestamp of metrics collection
     pub timestamp: u64,
-    
+
     /// Cache performance metrics
     pub cache: CacheMetrics,
-    
+
     /// Deduplication metrics
     pub dedup: DedupMetrics,
-    
+
     /// Batch operation metrics
     pub batch: BatchMetrics,
-    
+
     /// Compression metrics
     pub compression: CompressionMetrics,
-    
+
     /// I/O performance metrics
     pub io: IoMetrics,
-    
+
     /// Overall system metrics
     pub system: SystemMetrics,
-    
+
     /// Resumable operation metrics  
     pub resumable: ResumableMetrics,
-    
+
     /// Performance monitoring metrics
     pub performance: PerformanceMetrics,
 }
@@ -139,48 +139,48 @@ pub enum HealthStatus {
 /// Metrics collector for real-time performance tracking
 pub struct MetricsCollector {
     start_time: Instant,
-    
+
     // Cache metrics
     cache_hits: AtomicU64,
     cache_misses: AtomicU64,
     cache_evictions: AtomicU64,
-    
+
     // Dedup metrics
     dedup_hits: AtomicU64,
     unique_chunks: AtomicU64,
     duplicate_chunks: AtomicU64,
     bytes_saved: AtomicU64,
-    
+
     // Batch metrics
     batch_count: AtomicU64,
     batch_chunks: AtomicU64,
-    
+
     // Compression metrics
     bytes_before_compression: AtomicU64,
     bytes_after_compression: AtomicU64,
-    
+
     // I/O metrics
     read_ops: AtomicU64,
     write_ops: AtomicU64,
     bytes_read: AtomicU64,
     bytes_written: AtomicU64,
-    
+
     // Timing metrics
     read_latencies: Arc<RwLock<Vec<Duration>>>,
     write_latencies: Arc<RwLock<Vec<Duration>>>,
     compression_times: Arc<RwLock<Vec<Duration>>>,
     decompression_times: Arc<RwLock<Vec<Duration>>>,
-    
+
     // Error tracking
     errors: AtomicU64,
-    
+
     // Resumable operation metrics
     active_partials: AtomicU64,
     completed_resumes: AtomicU64,
     cancelled_resumes: AtomicU64,
     expired_partials: AtomicU64,
     resume_latencies: Arc<RwLock<Vec<Duration>>>,
-    
+
     // Performance monitoring
     operation_latencies: Arc<RwLock<Vec<Duration>>>,
     memory_usage: AtomicU64,
@@ -221,38 +221,41 @@ impl MetricsCollector {
             temp_files: AtomicU64::new(0),
         }
     }
-    
+
     pub fn record_cache_hit(&self) {
         self.cache_hits.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_cache_miss(&self) {
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_cache_eviction(&self) {
         self.cache_evictions.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_dedup_hit(&self, bytes_saved: u64) {
         self.dedup_hits.fetch_add(1, Ordering::Relaxed);
         self.duplicate_chunks.fetch_add(1, Ordering::Relaxed);
         self.bytes_saved.fetch_add(bytes_saved, Ordering::Relaxed);
     }
-    
+
     pub fn record_unique_chunk(&self) {
         self.unique_chunks.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_batch(&self, chunk_count: usize) {
         self.batch_count.fetch_add(1, Ordering::Relaxed);
-        self.batch_chunks.fetch_add(chunk_count as u64, Ordering::Relaxed);
+        self.batch_chunks
+            .fetch_add(chunk_count as u64, Ordering::Relaxed);
     }
-    
+
     pub fn record_compression(&self, before: u64, after: u64, duration: Duration) {
-        self.bytes_before_compression.fetch_add(before, Ordering::Relaxed);
-        self.bytes_after_compression.fetch_add(after, Ordering::Relaxed);
-        
+        self.bytes_before_compression
+            .fetch_add(before, Ordering::Relaxed);
+        self.bytes_after_compression
+            .fetch_add(after, Ordering::Relaxed);
+
         tokio::spawn({
             let times = Arc::clone(&self.compression_times);
             async move {
@@ -264,52 +267,52 @@ impl MetricsCollector {
             }
         });
     }
-    
+
     pub async fn record_read(&self, bytes: u64, duration: Duration) {
         self.read_ops.fetch_add(1, Ordering::Relaxed);
         self.bytes_read.fetch_add(bytes, Ordering::Relaxed);
-        
+
         let mut latencies = self.read_latencies.write().await;
         latencies.push(duration);
         if latencies.len() > 10000 {
             latencies.drain(0..5000);
         }
     }
-    
+
     pub async fn record_write(&self, bytes: u64, duration: Duration) {
         self.write_ops.fetch_add(1, Ordering::Relaxed);
         self.bytes_written.fetch_add(bytes, Ordering::Relaxed);
-        
+
         let mut latencies = self.write_latencies.write().await;
         latencies.push(duration);
         if latencies.len() > 10000 {
             latencies.drain(0..5000);
         }
     }
-    
+
     pub fn record_error(&self) {
         self.errors.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     /// Collect current metrics snapshot
     pub async fn collect(&self) -> StorageMetrics {
         let uptime = self.start_time.elapsed();
         let uptime_secs = uptime.as_secs();
-        
+
         let cache_hits = self.cache_hits.load(Ordering::Relaxed);
         let cache_misses = self.cache_misses.load(Ordering::Relaxed);
         let total_cache_ops = cache_hits + cache_misses;
-        
+
         let bytes_written = self.bytes_written.load(Ordering::Relaxed);
         let bytes_read = self.bytes_read.load(Ordering::Relaxed);
         let total_bytes = bytes_written + bytes_read;
-        
+
         let throughput_mbps = if uptime_secs > 0 {
             (total_bytes as f64 / uptime_secs as f64) / (1024.0 * 1024.0)
         } else {
             0.0
         };
-        
+
         let bytes_before = self.bytes_before_compression.load(Ordering::Relaxed);
         let bytes_after = self.bytes_after_compression.load(Ordering::Relaxed);
         let compression_ratio = if bytes_before > 0 {
@@ -317,7 +320,7 @@ impl MetricsCollector {
         } else {
             1.0
         };
-        
+
         let batch_count = self.batch_count.load(Ordering::Relaxed);
         let batch_chunks = self.batch_chunks.load(Ordering::Relaxed);
         let avg_batch_size = if batch_count > 0 {
@@ -325,7 +328,7 @@ impl MetricsCollector {
         } else {
             0.0
         };
-        
+
         let unique = self.unique_chunks.load(Ordering::Relaxed);
         let duplicate = self.duplicate_chunks.load(Ordering::Relaxed);
         let dedup_ratio = if unique + duplicate > 0 {
@@ -333,7 +336,7 @@ impl MetricsCollector {
         } else {
             0.0
         };
-        
+
         let read_latencies = self.read_latencies.read().await;
         let avg_read_latency_ms = if !read_latencies.is_empty() {
             let sum: Duration = read_latencies.iter().sum();
@@ -341,7 +344,7 @@ impl MetricsCollector {
         } else {
             0.0
         };
-        
+
         let write_latencies = self.write_latencies.read().await;
         let avg_write_latency_ms = if !write_latencies.is_empty() {
             let sum: Duration = write_latencies.iter().sum();
@@ -349,7 +352,7 @@ impl MetricsCollector {
         } else {
             0.0
         };
-        
+
         StorageMetrics {
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -364,8 +367,8 @@ impl MetricsCollector {
                 total_hits: cache_hits,
                 total_misses: cache_misses,
                 evictions: self.cache_evictions.load(Ordering::Relaxed),
-                cached_chunks: 0, // Will be filled by actual cache stats
-                cache_size_bytes: 0, // Will be filled by actual cache stats
+                cached_chunks: 0,        // Will be filled by actual cache stats
+                cache_size_bytes: 0,     // Will be filled by actual cache stats
                 avg_access_time_us: 0.0, // Will be calculated from actual measurements
             },
             dedup: DedupMetrics {
@@ -379,14 +382,14 @@ impl MetricsCollector {
                 total_batches: batch_count,
                 avg_batch_size,
                 avg_batch_latency_ms: 0.0, // Will be calculated from actual measurements
-                max_batch_size: 100, // Configured max
+                max_batch_size: 100,       // Configured max
                 total_chunks_batched: batch_chunks,
             },
             compression: CompressionMetrics {
                 compression_ratio,
                 bytes_before,
                 bytes_after,
-                avg_compression_time_us: 0.0, // Will be calculated
+                avg_compression_time_us: 0.0,   // Will be calculated
                 avg_decompression_time_us: 0.0, // Will be calculated
             },
             io: IoMetrics {
@@ -400,7 +403,7 @@ impl MetricsCollector {
             },
             system: SystemMetrics {
                 uptime_seconds: uptime_secs,
-                total_operations: self.read_ops.load(Ordering::Relaxed) 
+                total_operations: self.read_ops.load(Ordering::Relaxed)
                     + self.write_ops.load(Ordering::Relaxed),
                 errors: self.errors.load(Ordering::Relaxed),
                 throughput_mbps,
@@ -415,7 +418,7 @@ impl MetricsCollector {
                 } else {
                     1.0
                 };
-                
+
                 let resume_latencies = self.resume_latencies.read().await;
                 let avg_resume_time_ms = if !resume_latencies.is_empty() {
                     let sum: Duration = resume_latencies.iter().sum();
@@ -423,7 +426,7 @@ impl MetricsCollector {
                 } else {
                     0.0
                 };
-                
+
                 ResumableMetrics {
                     active_partials: self.active_partials.load(Ordering::Relaxed),
                     completed_resumes: completed,
@@ -436,11 +439,11 @@ impl MetricsCollector {
             },
             performance: {
                 let operation_latencies = self.operation_latencies.read().await;
-                
+
                 // Calculate percentiles
                 let mut sorted_latencies: Vec<Duration> = operation_latencies.clone();
                 sorted_latencies.sort();
-                
+
                 let (p50, p95, p99) = if !sorted_latencies.is_empty() {
                     let len = sorted_latencies.len();
                     let p50 = sorted_latencies[len * 50 / 100].as_millis() as f64;
@@ -450,24 +453,24 @@ impl MetricsCollector {
                 } else {
                     (0.0, 0.0, 0.0)
                 };
-                
-                let total_ops = self.read_ops.load(Ordering::Relaxed) 
-                    + self.write_ops.load(Ordering::Relaxed);
+
+                let total_ops =
+                    self.read_ops.load(Ordering::Relaxed) + self.write_ops.load(Ordering::Relaxed);
                 let ops_per_second = if uptime_secs > 0 {
                     total_ops as f64 / uptime_secs as f64
                 } else {
                     0.0
                 };
-                
+
                 // Simple health score based on error rate and performance
                 let error_rate = if total_ops > 0 {
                     self.errors.load(Ordering::Relaxed) as f64 / total_ops as f64
                 } else {
                     0.0
                 };
-                
+
                 let health_score = (1.0 - error_rate).max(0.0);
-                
+
                 PerformanceMetrics {
                     operations_per_second: ops_per_second,
                     avg_latency_p50_ms: p50,
@@ -481,13 +484,13 @@ impl MetricsCollector {
             },
         }
     }
-    
+
     /// Export metrics as JSON
     pub async fn export_json(&self) -> String {
         let metrics = self.collect().await;
         serde_json::to_string_pretty(&metrics).unwrap_or_else(|_| "{}".to_string())
     }
-    
+
     /// Reset all metrics
     pub async fn reset(&self) {
         self.cache_hits.store(0, Ordering::Relaxed);
@@ -506,12 +509,12 @@ impl MetricsCollector {
         self.bytes_read.store(0, Ordering::Relaxed);
         self.bytes_written.store(0, Ordering::Relaxed);
         self.errors.store(0, Ordering::Relaxed);
-        
+
         self.read_latencies.write().await.clear();
         self.write_latencies.write().await.clear();
         self.compression_times.write().await.clear();
         self.decompression_times.write().await.clear();
-        
+
         self.active_partials.store(0, Ordering::Relaxed);
         self.completed_resumes.store(0, Ordering::Relaxed);
         self.cancelled_resumes.store(0, Ordering::Relaxed);
@@ -521,16 +524,16 @@ impl MetricsCollector {
         self.memory_usage.store(0, Ordering::Relaxed);
         self.temp_files.store(0, Ordering::Relaxed);
     }
-    
+
     // Resumable operation metrics
     pub fn record_partial_started(&self) {
         self.active_partials.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_partial_completed(&self, duration: Duration) {
         self.active_partials.fetch_sub(1, Ordering::Relaxed);
         self.completed_resumes.fetch_add(1, Ordering::Relaxed);
-        
+
         tokio::spawn({
             let latencies = self.resume_latencies.clone();
             async move {
@@ -542,17 +545,17 @@ impl MetricsCollector {
             }
         });
     }
-    
+
     pub fn record_partial_cancelled(&self) {
         self.active_partials.fetch_sub(1, Ordering::Relaxed);
         self.cancelled_resumes.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_partial_expired(&self) {
         self.active_partials.fetch_sub(1, Ordering::Relaxed);
         self.expired_partials.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_operation_latency(&self, duration: Duration) {
         tokio::spawn({
             let latencies = self.operation_latencies.clone();
@@ -565,26 +568,26 @@ impl MetricsCollector {
             }
         });
     }
-    
+
     pub fn update_memory_usage(&self, bytes: u64) {
         self.memory_usage.store(bytes, Ordering::Relaxed);
     }
-    
+
     pub fn record_temp_file_created(&self) {
         self.temp_files.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     pub fn record_temp_file_removed(&self) {
         self.temp_files.fetch_sub(1, Ordering::Relaxed);
     }
-    
+
     /// Calculate storage health based on metrics
     pub async fn calculate_health(&self) -> StorageHealth {
         let metrics = self.collect().await;
         let mut issues = Vec::new();
         let mut recommendations = Vec::new();
         let mut score: f64 = 1.0;
-        
+
         // Check error rate
         let total_ops = metrics.system.total_operations;
         if total_ops > 0 {
@@ -598,7 +601,7 @@ impl MetricsCollector {
                 score -= 0.1;
             }
         }
-        
+
         // Check cache hit rate
         if metrics.cache.hit_rate < 0.7 {
             issues.push("Low cache hit rate".to_string());
@@ -607,14 +610,14 @@ impl MetricsCollector {
         } else if metrics.cache.hit_rate < 0.8 {
             score -= 0.1;
         }
-        
+
         // Check throughput
         if metrics.system.throughput_mbps < 50.0 {
             issues.push("Low throughput performance".to_string());
             recommendations.push("Check disk I/O and consider SSD storage".to_string());
             score -= 0.2;
         }
-        
+
         // Check resumable operations
         let active = metrics.resumable.active_partials;
         if active > 100 {
@@ -622,14 +625,14 @@ impl MetricsCollector {
             recommendations.push("Monitor for stuck transfers and consider cleanup".to_string());
             score -= 0.1;
         }
-        
+
         // Check temp files
         if metrics.performance.temp_files_count > 1000 {
             issues.push("High number of temporary files".to_string());
             recommendations.push("Run cleanup_expired_partials() more frequently".to_string());
             score -= 0.1;
         }
-        
+
         // Determine status
         let status = if score >= 0.9 {
             HealthStatus::Healthy
@@ -640,7 +643,7 @@ impl MetricsCollector {
         } else {
             HealthStatus::Unknown
         };
-        
+
         StorageHealth {
             status,
             score: score.max(0.0),
@@ -663,11 +666,11 @@ impl Default for MetricsCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_metrics_collection() {
         let collector = MetricsCollector::new();
-        
+
         // Record some metrics
         collector.record_cache_hit();
         collector.record_cache_hit();
@@ -675,10 +678,10 @@ mod tests {
         collector.record_dedup_hit(1024);
         collector.record_unique_chunk();
         collector.record_batch(10);
-        
+
         // Collect metrics
         let metrics = collector.collect().await;
-        
+
         // Verify metrics
         assert_eq!(metrics.cache.total_hits, 2);
         assert_eq!(metrics.cache.total_misses, 1);
@@ -688,18 +691,18 @@ mod tests {
         assert_eq!(metrics.batch.total_batches, 1);
         assert_eq!(metrics.batch.total_chunks_batched, 10);
     }
-    
+
     #[tokio::test]
     async fn test_metrics_reset() {
         let collector = MetricsCollector::new();
-        
+
         // Record metrics
         collector.record_cache_hit();
         collector.record_error();
-        
+
         // Reset
         collector.reset().await;
-        
+
         // Verify reset
         let metrics = collector.collect().await;
         assert_eq!(metrics.cache.total_hits, 0);

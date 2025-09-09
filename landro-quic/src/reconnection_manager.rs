@@ -104,10 +104,10 @@ impl PeerConnectionState {
         self.retry_count += 1;
         self.last_attempt = Some(Instant::now());
         self.state = ConnectionState::Reconnecting;
-        
+
         // Calculate next delay with exponential backoff
         let next_delay = Duration::from_millis(
-            (self.current_delay.as_millis() as f64 * config.backoff_multiplier) as u64
+            (self.current_delay.as_millis() as f64 * config.backoff_multiplier) as u64,
         );
         self.current_delay = next_delay.min(config.max_retry_delay);
 
@@ -115,9 +115,8 @@ impl PeerConnectionState {
         if config.enable_jitter {
             let jitter = fastrand::f64() * 0.1; // ±10% jitter
             let jitter_ms = (self.current_delay.as_millis() as f64 * jitter) as u64;
-            self.current_delay = Duration::from_millis(
-                self.current_delay.as_millis() as u64 + jitter_ms
-            );
+            self.current_delay =
+                Duration::from_millis(self.current_delay.as_millis() as u64 + jitter_ms);
         }
     }
 
@@ -174,10 +173,13 @@ impl ReconnectionManager {
         }
         *running = true;
 
-        info!("Starting reconnection manager with config: {:?}", self.config);
-        
+        info!(
+            "Starting reconnection manager with config: {:?}",
+            self.config
+        );
+
         self.start_monitoring_task().await;
-        
+
         info!("Reconnection manager started successfully");
         Ok(())
     }
@@ -200,9 +202,10 @@ impl ReconnectionManager {
     /// Track a new peer connection
     pub async fn track_peer(&self, peer_addr: SocketAddr, connection: Arc<Connection>) {
         let mut peer_states = self.peer_states.write().await;
-        let mut state = peer_states.entry(peer_addr)
+        let mut state = peer_states
+            .entry(peer_addr)
             .or_insert_with(|| PeerConnectionState::new(peer_addr));
-        
+
         state.mark_success(connection);
         debug!("Tracking peer connection: {}", peer_addr);
     }
@@ -210,9 +213,10 @@ impl ReconnectionManager {
     /// Report connection failure for a peer
     pub async fn report_connection_failure(&self, peer_addr: SocketAddr, reason: String) {
         let mut peer_states = self.peer_states.write().await;
-        let mut state = peer_states.entry(peer_addr)
+        let mut state = peer_states
+            .entry(peer_addr)
             .or_insert_with(|| PeerConnectionState::new(peer_addr));
-        
+
         state.mark_failed(reason.clone());
         warn!("Connection failure reported for {}: {}", peer_addr, reason);
 
@@ -261,11 +265,14 @@ impl ReconnectionManager {
                     if let Some(connection) = &state.connection {
                         if connection.is_closed() {
                             debug!("Detected closed connection for peer: {}", peer_addr);
-                            
+
                             // Report failure and start reconnection
                             // We can't call methods on self from inside this spawn, so we'll need
                             // to restructure this or use message passing
-                            warn!("Connection to {} is closed, should trigger reconnection", peer_addr);
+                            warn!(
+                                "Connection to {} is closed, should trigger reconnection",
+                                peer_addr
+                            );
                         }
                     }
                 }
@@ -291,7 +298,8 @@ impl ReconnectionManager {
                 let should_continue = {
                     let states = peer_states.read().await;
                     if let Some(state) = states.get(&peer_addr) {
-                        state.is_ready_for_retry(&config) && state.state != ConnectionState::Connected
+                        state.is_ready_for_retry(&config)
+                            && state.state != ConnectionState::Connected
                     } else {
                         false
                     }
@@ -306,21 +314,22 @@ impl ReconnectionManager {
                     let mut states = peer_states.write().await;
                     if let Some(state) = states.get_mut(&peer_addr) {
                         state.start_retry_attempt(&config);
-                        info!("Attempting reconnection to {} (attempt {})", peer_addr, state.retry_count);
+                        info!(
+                            "Attempting reconnection to {} (attempt {})",
+                            peer_addr, state.retry_count
+                        );
                     }
                 }
 
                 // Attempt reconnection
-                let connection_result = timeout(
-                    config.connection_timeout,
-                    client.connect(peer_addr)
-                ).await;
+                let connection_result =
+                    timeout(config.connection_timeout, client.connect(peer_addr)).await;
 
                 match connection_result {
                     Ok(Ok(connection)) => {
                         // Successful reconnection
                         info!("Successfully reconnected to peer: {}", peer_addr);
-                        
+
                         // Update state
                         {
                             let mut states = peer_states.write().await;
@@ -339,15 +348,18 @@ impl ReconnectionManager {
                     Ok(Err(e)) => {
                         // Connection failed
                         error!("Failed to reconnect to {}: {}", peer_addr, e);
-                        
+
                         // Update failure state
                         {
                             let mut states = peer_states.write().await;
                             if let Some(state) = states.get_mut(&peer_addr) {
                                 if state.retry_count >= config.max_retry_attempts {
-                                    state.mark_failed(format!("Max retry attempts exceeded: {}", e));
-                                    error!("Giving up reconnection to {} after {} attempts", 
-                                           peer_addr, config.max_retry_attempts);
+                                    state
+                                        .mark_failed(format!("Max retry attempts exceeded: {}", e));
+                                    error!(
+                                        "Giving up reconnection to {} after {} attempts",
+                                        peer_addr, config.max_retry_attempts
+                                    );
                                     break;
                                 } else {
                                     state.state = ConnectionState::Backoff;
@@ -358,7 +370,7 @@ impl ReconnectionManager {
                     Err(_) => {
                         // Connection timeout
                         error!("Connection timeout while reconnecting to {}", peer_addr);
-                        
+
                         {
                             let mut states = peer_states.write().await;
                             if let Some(state) = states.get_mut(&peer_addr) {
@@ -371,11 +383,16 @@ impl ReconnectionManager {
                 // Wait before next retry attempt
                 let delay = {
                     let states = peer_states.read().await;
-                    states.get(&peer_addr).map(|s| s.current_delay)
+                    states
+                        .get(&peer_addr)
+                        .map(|s| s.current_delay)
                         .unwrap_or(Duration::from_secs(5))
                 };
-                
-                debug!("Waiting {:?} before next reconnection attempt to {}", delay, peer_addr);
+
+                debug!(
+                    "Waiting {:?} before next reconnection attempt to {}",
+                    delay, peer_addr
+                );
                 tokio::time::sleep(delay).await;
             }
 
@@ -411,7 +428,7 @@ impl ReconnectionManager {
                 ConnectionState::Failed => stats.failed_peers += 1,
                 _ => {}
             }
-            
+
             stats.total_reconnections += state.retry_count as usize;
             if state.state == ConnectionState::Connected && state.retry_count > 0 {
                 stats.successful_reconnections += 1;

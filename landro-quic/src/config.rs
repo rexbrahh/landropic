@@ -67,17 +67,17 @@ impl QuicConfig {
             bind_addr: "[::]:9876".parse().unwrap(),
             idle_timeout: Duration::from_secs(180), // 3 minutes for large file syncs
             keep_alive_interval: Duration::from_secs(30), // Balanced for file sync
-            max_concurrent_bidi_streams: 1024,     // Increased for better parallelism
-            max_concurrent_uni_streams: 2048,      // More streams for file metadata
+            max_concurrent_bidi_streams: 1024,      // Increased for better parallelism
+            max_concurrent_uni_streams: 2048,       // More streams for file metadata
             stream_receive_window: 128 * 1024 * 1024, // 128MB per stream for large chunks
             receive_window: 2 * 1024 * 1024 * 1024, // 2GB connection window for bulk transfers
-            max_udp_payload_size: 1472,            // Optimal for Ethernet MTU (1500 - headers)
-            initial_rtt_us: 50,                    // 50μs for fast LAN
-            max_ack_delay_ms: 1,                   // 1ms for lower latency
-            enable_datagrams: true,                // Enable for small control messages
-            congestion_control: "bbr".to_string(), // BBR for better throughput even on LAN
-            send_buffer_size: 64 * 1024 * 1024,    // 64MB send buffer for bulk data
-            recv_buffer_size: 64 * 1024 * 1024,    // 64MB receive buffer for bulk data
+            max_udp_payload_size: 1472,             // Optimal for Ethernet MTU (1500 - headers)
+            initial_rtt_us: 50,                     // 50μs for fast LAN
+            max_ack_delay_ms: 1,                    // 1ms for lower latency
+            enable_datagrams: true,                 // Enable for small control messages
+            congestion_control: "bbr".to_string(),  // BBR for better throughput even on LAN
+            send_buffer_size: 64 * 1024 * 1024,     // 64MB send buffer for bulk data
+            recv_buffer_size: 64 * 1024 * 1024,     // 64MB receive buffer for bulk data
         }
     }
 
@@ -87,17 +87,17 @@ impl QuicConfig {
             bind_addr: "[::]:9876".parse().unwrap(),
             idle_timeout: Duration::from_secs(600), // 10 minutes for massive transfers
             keep_alive_interval: Duration::from_secs(45), // Balanced for responsiveness
-            max_concurrent_bidi_streams: 2048,     // Maximum parallelism for file chunks
-            max_concurrent_uni_streams: 4096,      // Many control/metadata streams
+            max_concurrent_bidi_streams: 2048,      // Maximum parallelism for file chunks
+            max_concurrent_uni_streams: 4096,       // Many control/metadata streams
             stream_receive_window: 256 * 1024 * 1024, // 256MB for large file chunks
             receive_window: 4 * 1024 * 1024 * 1024, // 4GB for massive parallel transfers
-            max_udp_payload_size: 1472,            // Optimal for Ethernet MTU
-            initial_rtt_us: 25,                    // Ultra-aggressive for LAN
-            max_ack_delay_ms: 1,                   // Minimal ACK delay
-            enable_datagrams: true,                // For quick metadata exchange
-            congestion_control: "bbr".to_string(), // BBR for better throughput
-            send_buffer_size: 128 * 1024 * 1024,   // 128MB for chunk batching
-            recv_buffer_size: 128 * 1024 * 1024,   // 128MB for chunk reception
+            max_udp_payload_size: 1472,             // Optimal for Ethernet MTU
+            initial_rtt_us: 25,                     // Ultra-aggressive for LAN
+            max_ack_delay_ms: 1,                    // Minimal ACK delay
+            enable_datagrams: true,                 // For quick metadata exchange
+            congestion_control: "bbr".to_string(),  // BBR for better throughput
+            send_buffer_size: 128 * 1024 * 1024,    // 128MB for chunk batching
+            recv_buffer_size: 128 * 1024 * 1024,    // 128MB for chunk reception
         }
     }
 
@@ -176,10 +176,12 @@ impl QuicConfig {
 
         // LAN optimizations
         transport.initial_rtt(Duration::from_micros(self.initial_rtt_us));
-        
+
         // File sync specific optimizations
-        transport.max_concurrent_bidi_streams(VarInt::from_u64(self.max_concurrent_bidi_streams).unwrap());
-        
+        transport.max_concurrent_bidi_streams(
+            VarInt::from_u64(self.max_concurrent_bidi_streams).unwrap(),
+        );
+
         // Datagram support for small control messages
         if self.enable_datagrams {
             transport.datagram_receive_buffer_size(Some(262144)); // 256KB for metadata
@@ -204,10 +206,10 @@ impl QuicConfig {
 
         // Additional performance tuning for file sync
         transport.mtu_discovery_config(Some(Default::default())); // Enable MTU discovery
-        
+
         // Optimize for bulk data transfer patterns
         transport.stream_receive_window(VarInt::from_u64(self.stream_receive_window).unwrap());
-        
+
         transport
     }
 

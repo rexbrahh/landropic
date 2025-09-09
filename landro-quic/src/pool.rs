@@ -279,7 +279,11 @@ impl ConnectionPool {
     }
 
     /// Add connection to the pool
-    pub async fn add_to_pool(&self, peer_addr: SocketAddr, connection: Arc<Connection>) -> Result<()> {
+    pub async fn add_to_pool(
+        &self,
+        peer_addr: SocketAddr,
+        connection: Arc<Connection>,
+    ) -> Result<()> {
         let mut connections = self.connections.write().await;
         let pooled_conn = PooledConnection::new(connection, peer_addr);
 
@@ -347,12 +351,12 @@ impl ConnectionPool {
             total_connections: 0,
             connections_per_peer: std::collections::HashMap::new(),
         };
-        
+
         for (addr, conns) in connections.iter() {
             stats.connections_per_peer.insert(*addr, conns.len());
             stats.total_connections += conns.len();
         }
-        
+
         stats
     }
 
@@ -360,7 +364,11 @@ impl ConnectionPool {
     pub async fn remove_peer_connections(&self, peer_addr: std::net::SocketAddr) {
         let mut connections = self.connections.write().await;
         if let Some(removed) = connections.remove(&peer_addr) {
-            info!("Removed {} unhealthy connections for peer {}", removed.len(), peer_addr);
+            info!(
+                "Removed {} unhealthy connections for peer {}",
+                removed.len(),
+                peer_addr
+            );
         }
     }
 }

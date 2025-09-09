@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::fs::{self, File};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::{Mutex, RwLock, Semaphore};
-use tracing::{debug, trace, warn, error};
+use tracing::{debug, error, trace, warn};
 
 use crate::errors::{CasError, Result};
 use crate::packfile::{PackfileConfig, PackfileManager};
@@ -36,7 +36,11 @@ pub struct PartialTransfer {
 
 impl PartialTransfer {
     /// Create a new partial transfer
-    pub fn new(temp_path: PathBuf, expected_hash: Option<ContentHash>, total_size: Option<u64>) -> Self {
+    pub fn new(
+        temp_path: PathBuf,
+        expected_hash: Option<ContentHash>,
+        total_size: Option<u64>,
+    ) -> Self {
         let expires_at = std::time::SystemTime::now() + std::time::Duration::from_secs(24 * 3600); // 24 hours
         Self {
             temp_path,
@@ -47,7 +51,7 @@ impl PartialTransfer {
             expires_at,
         }
     }
-    
+
     /// Check if this partial transfer has expired
     pub fn is_expired(&self) -> bool {
         std::time::SystemTime::now() > self.expires_at
@@ -142,7 +146,7 @@ impl Default for CacheConfig {
         Self {
             max_chunks: 10000,
             max_size_bytes: 512 * 1024 * 1024, // 512MB
-            ttl_seconds: 300, // 5 minutes
+            ttl_seconds: 300,                  // 5 minutes
             adaptive_caching: true,
             prefetch_enabled: true,
         }
@@ -282,23 +286,39 @@ impl std::fmt::Debug for ContentStore {
         // Security-conscious debug implementation
         // Only expose safe, non-sensitive operational information
         f.debug_struct("ContentStore")
-            .field("storage_root", &format!("{}/**", self.root_path.file_name()
-                .map(|n| n.to_string_lossy())
-                .unwrap_or("unknown".into())))
+            .field(
+                "storage_root",
+                &format!(
+                    "{}/**",
+                    self.root_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or("unknown".into())
+                ),
+            )
             .field("fsync_policy", &self.config.fsync_policy)
             .field("compression", &self.config.compression)
             .field("packfiles_enabled", &self.config.enable_packfiles)
             .field("batch_ops_enabled", &self.config.enable_batch_ops)
             .field("max_concurrent_ops", &self.config.max_concurrent_ops)
             .field("pending_syncs", &self.pending_syncs.load(Ordering::Relaxed))
-            .field("background_scan_enabled", &self.config.enable_background_scan)
+            .field(
+                "background_scan_enabled",
+                &self.config.enable_background_scan,
+            )
             // Expose safe runtime statistics without sensitive data
             .field("total_writes", &self.stats.writes.load(Ordering::Relaxed))
             .field("total_reads", &self.stats.reads.load(Ordering::Relaxed))
             .field("cache_hits", &self.stats.cache_hits.load(Ordering::Relaxed))
-            .field("cache_misses", &self.stats.cache_misses.load(Ordering::Relaxed))
+            .field(
+                "cache_misses",
+                &self.stats.cache_misses.load(Ordering::Relaxed),
+            )
             .field("dedup_hits", &self.stats.dedup_hits.load(Ordering::Relaxed))
-            .field("batch_flushes", &self.stats.batch_flushes.load(Ordering::Relaxed))
+            .field(
+                "batch_flushes",
+                &self.stats.batch_flushes.load(Ordering::Relaxed),
+            )
             .finish()
     }
 }
@@ -485,15 +505,19 @@ impl ContentStore {
     }
 
     /// Write multiple objects in a batch for improved performance
-    pub async fn write_batch(&self, chunks: Vec<(&[u8], Option<ContentHash>)>) -> Result<Vec<ObjectRef>> {
+    pub async fn write_batch(
+        &self,
+        chunks: Vec<(&[u8], Option<ContentHash>)>,
+    ) -> Result<Vec<ObjectRef>> {
         let mut results = Vec::with_capacity(chunks.len());
         let mut batch = self.batch_writer.lock().await;
-        
+
         for (data, expected_hash) in chunks {
             // Validate object size
-            validation::validate_object_size(data.len())
-                .map_err(|e| CasError::InvalidOperation(format!("Object validation failed: {}", e)))?;
-            
+            validation::validate_object_size(data.len()).map_err(|e| {
+                CasError::InvalidOperation(format!("Object validation failed: {}", e))
+            })?;
+
             // Calculate hash or use provided one
             let hash = if let Some(h) = expected_hash {
                 h
@@ -502,7 +526,7 @@ impl ContentStore {
                 hasher.update(data);
                 ContentHash::from_blake3(hasher.finalize())
             };
-            
+
             // Check dedup index first
             {
                 let dedup = self.dedup_index.read().await;
@@ -512,25 +536,25 @@ impl ContentStore {
                     continue;
                 }
             }
-            
+
             // Add to batch
             batch.pending.push((hash, Bytes::from(data.to_vec())));
             batch.total_size += data.len();
-            
+
             results.push(ObjectRef {
                 hash,
                 size: data.len() as u64,
             });
         }
-        
+
         // Flush if needed
         if batch.should_flush() {
             self.flush_batch_internal(&mut batch).await?;
         }
-        
+
         Ok(results)
     }
-    
+
     /// Flush pending batch writes
     pub async fn flush_batch(&self) -> Result<()> {
         let mut batch = self.batch_writer.lock().await;
@@ -539,43 +563,53 @@ impl ContentStore {
         }
         Ok(())
     }
-    
+
     async fn flush_batch_internal(&self, batch: &mut BatchWriter) -> Result<()> {
         if batch.pending.is_empty() {
             return Ok(());
         }
-        
-        debug!("Flushing batch of {} chunks ({} bytes)", batch.pending.len(), batch.total_size);
+
+        debug!(
+            "Flushing batch of {} chunks ({} bytes)",
+            batch.pending.len(),
+            batch.total_size
+        );
         self.stats.batch_flushes.fetch_add(1, Ordering::Relaxed);
-        
+
         // Process all pending writes concurrently with semaphore limiting
         let mut handles = Vec::new();
         for (hash, data) in batch.pending.drain(..) {
             let store = self.clone();
             let permit = self.write_semaphore.clone().acquire_owned().await;
-            
+
             let handle = tokio::spawn(async move {
                 let _permit = permit;
                 store.write_individual_optimized(&data, hash).await
             });
             handles.push(handle);
         }
-        
+
         // Wait for all writes to complete
         for handle in handles {
-            handle.await.map_err(|e| CasError::Internal(format!("Batch write failed: {}", e)))??;
+            handle
+                .await
+                .map_err(|e| CasError::Internal(format!("Batch write failed: {}", e)))??;
         }
-        
+
         batch.total_size = 0;
         batch.last_flush = Instant::now();
-        
+
         Ok(())
     }
-    
+
     /// Optimized individual write with compression support
-    async fn write_individual_optimized(&self, data: &[u8], hash: ContentHash) -> Result<ObjectRef> {
+    async fn write_individual_optimized(
+        &self,
+        data: &[u8],
+        hash: ContentHash,
+    ) -> Result<ObjectRef> {
         let object_path = self.object_path(&hash);
-        
+
         // Check if already exists
         if object_path.exists() {
             return Ok(ObjectRef {
@@ -583,18 +617,23 @@ impl ContentStore {
                 size: data.len() as u64,
             });
         }
-        
+
         // Compress if configured
         let (compressed_data, was_compressed) = self.compress_data(data)?;
-        let data_to_write = if was_compressed { &compressed_data } else { data };
-        
+        let data_to_write = if was_compressed {
+            &compressed_data
+        } else {
+            data
+        };
+
         // Ensure shard directories exist
         if let Some(parent) = object_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        
-        self.write_atomic(&object_path, data_to_write, &hash).await?;
-        
+
+        self.write_atomic(&object_path, data_to_write, &hash)
+            .await?;
+
         // Update cache
         {
             let mut cache = self.cache.write().await;
@@ -604,7 +643,7 @@ impl ContentStore {
                 last_accessed: Instant::now(),
                 access_count: 1,
             };
-            
+
             // Evict if necessary
             while cache.total_size + cached.size > self.config.cache_config.max_size_bytes {
                 if let Some((_, evicted)) = cache.chunks.pop_lru() {
@@ -612,29 +651,34 @@ impl ContentStore {
                     cache.eviction_count.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            
+
             cache.chunks.put(hash, cached.clone());
             cache.total_size += cached.size;
         }
-        
+
         // Update dedup index
         {
             let mut dedup = self.dedup_index.write().await;
-            dedup.insert(hash, ObjectRef {
+            dedup.insert(
                 hash,
-                size: data.len() as u64,
-            });
+                ObjectRef {
+                    hash,
+                    size: data.len() as u64,
+                },
+            );
         }
-        
+
         self.stats.writes.fetch_add(1, Ordering::Relaxed);
-        self.stats.bytes_written.fetch_add(data.len() as u64, Ordering::Relaxed);
-        
+        self.stats
+            .bytes_written
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
+
         Ok(ObjectRef {
             hash,
             size: data.len() as u64,
         })
     }
-    
+
     /// Compress data using configured algorithm
     fn compress_data(&self, data: &[u8]) -> Result<(Vec<u8>, bool)> {
         match self.config.compression {
@@ -660,26 +704,23 @@ impl ContentStore {
             }
         }
     }
-    
+
     /// Decompress data using configured algorithm
     fn decompress_data(&self, data: &[u8], compressed: bool) -> Result<Vec<u8>> {
         if !compressed {
             return Ok(data.to_vec());
         }
-        
+
         match self.config.compression {
             CompressionType::None => Ok(data.to_vec()),
-            CompressionType::Lz4 => {
-                lz4_flex::decompress_size_prepended(data)
-                    .map_err(|e| CasError::Internal(format!("Decompression failed: {}", e)))
-            }
-            CompressionType::Zstd { .. } => {
-                zstd::decode_all(data)
-                    .map_err(|e| CasError::Internal(format!("Decompression failed: {}", e)))
-            }
+            CompressionType::Lz4 => lz4_flex::decompress_size_prepended(data)
+                .map_err(|e| CasError::Internal(format!("Decompression failed: {}", e))),
+            CompressionType::Zstd { .. } => zstd::decode_all(data)
+                .map_err(|e| CasError::Internal(format!("Decompression failed: {}", e))),
             CompressionType::Snappy => {
                 let mut decoder = snap::raw::Decoder::new();
-                decoder.decompress_vec(data)
+                decoder
+                    .decompress_vec(data)
                     .map_err(|e| CasError::Internal(format!("Decompression failed: {}", e)))
             }
         }
@@ -717,7 +758,7 @@ impl ContentStore {
                 return Ok(obj_ref.clone());
             }
         }
-        
+
         // Check if object already exists (check both individual files and packfiles)
         if self.exists(&hash).await {
             trace!("Object {} already exists", hash);
@@ -725,11 +766,11 @@ impl ContentStore {
                 hash,
                 size: data.len() as u64,
             };
-            
+
             // Update dedup index
             let mut dedup = self.dedup_index.write().await;
             dedup.insert(hash, obj_ref.clone());
-            
+
             return Ok(obj_ref);
         }
 
@@ -813,7 +854,7 @@ impl ContentStore {
         // Validate hash format
         validation::validate_content_hash(&hash.to_string())
             .map_err(|e| CasError::InvalidOperation(format!("Hash validation failed: {}", e)))?;
-        
+
         // Check cache first
         {
             let mut cache = self.cache.write().await;
@@ -822,11 +863,13 @@ impl ContentStore {
                 cached.access_count += 1;
                 let cached_data = cached.data.clone();
                 let cached_size = cached.size;
-                
+
                 cache.hit_count.fetch_add(1, Ordering::Relaxed);
                 self.stats.cache_hits.fetch_add(1, Ordering::Relaxed);
                 self.stats.reads.fetch_add(1, Ordering::Relaxed);
-                self.stats.bytes_read.fetch_add(cached_size, Ordering::Relaxed);
+                self.stats
+                    .bytes_read
+                    .fetch_add(cached_size, Ordering::Relaxed);
                 trace!("Cache hit for chunk {}", hash);
                 return Ok(cached_data);
             }
@@ -847,7 +890,7 @@ impl ContentStore {
 
         // Fall back to individual file storage
         let data = self.read_individual(hash).await?;
-        
+
         // Update cache
         {
             let mut cache = self.cache.write().await;
@@ -857,7 +900,7 @@ impl ContentStore {
                 last_accessed: Instant::now(),
                 access_count: 1,
             };
-            
+
             // Evict if necessary
             while cache.total_size + cached.size > self.config.cache_config.max_size_bytes {
                 if let Some((_, evicted)) = cache.chunks.pop_lru() {
@@ -865,14 +908,16 @@ impl ContentStore {
                     cache.eviction_count.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            
+
             cache.chunks.put(*hash, cached.clone());
             cache.total_size += cached.size;
         }
-        
+
         self.stats.reads.fetch_add(1, Ordering::Relaxed);
-        self.stats.bytes_read.fetch_add(data.len() as u64, Ordering::Relaxed);
-        
+        self.stats
+            .bytes_read
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
+
         Ok(data)
     }
 
@@ -981,7 +1026,11 @@ impl ContentStore {
     /// # Returns
     ///
     /// An ObjectRef containing the hash and size of the stored data
-    pub async fn write_stream<R>(&self, mut reader: R, expected_hash: Option<&ContentHash>) -> Result<ObjectRef>
+    pub async fn write_stream<R>(
+        &self,
+        mut reader: R,
+        expected_hash: Option<&ContentHash>,
+    ) -> Result<ObjectRef>
     where
         R: AsyncRead + Unpin,
     {
@@ -989,41 +1038,41 @@ impl ContentStore {
         let mut hasher = Hasher::new();
         let temp_id = uuid::Uuid::new_v4();
         let temp_path = self.root_path.join(".tmp").join(format!("{}.tmp", temp_id));
-        
+
         // Ensure temp directory exists
         if let Some(parent) = temp_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        
+
         // Stream to temporary file while computing hash
         let mut file = BufWriter::new(File::create(&temp_path).await?);
         let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
         let mut total_size = 0u64;
-        
+
         loop {
             let n = reader.read(&mut buffer).await?;
             if n == 0 {
                 break;
             }
-            
+
             let chunk = &buffer[..n];
             hasher.update(chunk);
             file.write_all(chunk).await?;
             total_size += n as u64;
         }
-        
+
         file.flush().await?;
-        
+
         // Apply fsync based on policy
         if matches!(self.config.fsync_policy, FsyncPolicy::Always) {
             file.get_mut().sync_all().await?;
         }
-        
+
         drop(file); // Close the file
-        
+
         // Compute final hash
         let computed_hash = ContentHash::from_blake3(hasher.finalize());
-        
+
         // Verify hash if expected
         if let Some(expected) = expected_hash {
             if &computed_hash != expected {
@@ -1035,55 +1084,57 @@ impl ContentStore {
                 });
             }
         }
-        
+
         // Check if object already exists
         let object_path = self.object_path(&computed_hash);
         if object_path.exists() {
             // Remove temp file and return existing ref
             fs::remove_file(&temp_path).await?;
-            
+
             let obj_ref = ObjectRef {
                 hash: computed_hash,
                 size: total_size,
             };
-            
+
             // Update dedup index
             {
                 let mut dedup = self.dedup_index.write().await;
                 dedup.insert(computed_hash, obj_ref.clone());
             }
-            
+
             return Ok(obj_ref);
         }
-        
+
         // Ensure shard directories exist
         if let Some(parent) = object_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        
+
         // Move temp file to final location
         fs::rename(&temp_path, &object_path).await?;
-        
+
         let obj_ref = ObjectRef {
             hash: computed_hash,
             size: total_size,
         };
-        
+
         // Update dedup index
         {
             let mut dedup = self.dedup_index.write().await;
             dedup.insert(computed_hash, obj_ref.clone());
         }
-        
+
         // Update stats
         self.stats.writes.fetch_add(1, Ordering::Relaxed);
-        self.stats.bytes_written.fetch_add(total_size, Ordering::Relaxed);
-        
+        self.stats
+            .bytes_written
+            .fetch_add(total_size, Ordering::Relaxed);
+
         debug!("Streamed write of {} ({} bytes)", computed_hash, total_size);
-        
+
         Ok(obj_ref)
     }
-    
+
     /// Stream read operation that returns an async reader instead of loading full chunk.
     /// Useful for network transfers and large files.
     ///
@@ -1094,16 +1145,19 @@ impl ContentStore {
     /// # Returns
     ///
     /// A boxed async reader that streams the object data
-    pub async fn read_stream(&self, hash: &ContentHash) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
+    pub async fn read_stream(
+        &self,
+        hash: &ContentHash,
+    ) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
         // Validate hash format
         validation::validate_content_hash(&hash.to_string())
             .map_err(|e| CasError::InvalidOperation(format!("Hash validation failed: {}", e)))?;
-        
+
         // Check if exists first
         if !self.exists(hash).await {
             return Err(CasError::ObjectNotFound(*hash));
         }
-        
+
         // Try packfiles first if enabled
         if self.config.enable_packfiles {
             if let Some(ref manager) = self.packfile_manager {
@@ -1116,18 +1170,18 @@ impl ContentStore {
                 }
             }
         }
-        
+
         // Stream from individual file
         let object_path = self.object_path(hash);
         let file = File::open(&object_path).await?;
         let reader = BufReader::new(file);
-        
+
         // Update stats
         self.stats.reads.fetch_add(1, Ordering::Relaxed);
-        
+
         Ok(Box::new(reader))
     }
-    
+
     /// Write multiple chunks in a single batch transaction for improved performance.
     /// Uses streaming to avoid loading all chunks into memory at once.
     ///
@@ -1145,31 +1199,32 @@ impl ContentStore {
     {
         let chunks: Vec<_> = chunks.into_iter().collect();
         let mut results = Vec::with_capacity(chunks.len());
-        
+
         // Process chunks with concurrency control
         let mut handles = Vec::new();
-        
+
         for (reader, expected_hash) in chunks {
             let store = self.clone();
             let permit = self.write_semaphore.clone().acquire_owned().await;
-            
+
             let handle = tokio::spawn(async move {
                 let _permit = permit;
                 store.write_stream(reader, expected_hash.as_ref()).await
             });
             handles.push(handle);
         }
-        
+
         // Collect results
         for handle in handles {
-            let result = handle.await
+            let result = handle
+                .await
                 .map_err(|e| CasError::Internal(format!("Batch stream write failed: {}", e)))??;
             results.push(result);
         }
-        
+
         // Update batch stats
         self.stats.batch_flushes.fetch_add(1, Ordering::Relaxed);
-        
+
         Ok(results)
     }
 
@@ -1190,20 +1245,23 @@ impl ContentStore {
         total_size: Option<u64>,
     ) -> Result<PartialTransfer> {
         let temp_id = uuid::Uuid::new_v4();
-        let temp_path = self.root_path.join(".tmp").join(format!("{}.partial", temp_id));
-        
+        let temp_path = self
+            .root_path
+            .join(".tmp")
+            .join(format!("{}.partial", temp_id));
+
         // Ensure temp directory exists
         if let Some(parent) = temp_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        
+
         let partial = PartialTransfer::new(temp_path, expected_hash, total_size);
-        
+
         debug!("Started resumable write: {:?}", partial.temp_path);
-        
+
         Ok(partial)
     }
-    
+
     /// Continue writing to a partial transfer from a reader.
     /// This appends new data to the existing partial file and updates the hash.
     ///
@@ -1224,16 +1282,23 @@ impl ContentStore {
         R: AsyncRead + Unpin,
     {
         if partial.is_expired() {
-            return Err(CasError::InvalidOperation("Partial transfer has expired".to_string()));
+            return Err(CasError::InvalidOperation(
+                "Partial transfer has expired".to_string(),
+            ));
         }
-        
+
         // Open/create the partial file for appending
         let mut file = if partial.bytes_received == 0 {
             BufWriter::new(File::create(&partial.temp_path).await?)
         } else {
-            BufWriter::new(File::options().append(true).open(&partial.temp_path).await?)
+            BufWriter::new(
+                File::options()
+                    .append(true)
+                    .open(&partial.temp_path)
+                    .await?,
+            )
         };
-        
+
         // Initialize or restore hasher state
         let mut hasher = if let Some(_hash_state) = &partial.hash_state {
             // TODO: Deserialize hasher state when blake3 supports it
@@ -1244,7 +1309,9 @@ impl ContentStore {
                 let mut buffer = vec![0u8; 64 * 1024];
                 loop {
                     let n = existing_file.read(&mut buffer).await?;
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     existing_hasher.update(&buffer[..n]);
                 }
                 existing_hasher
@@ -1254,35 +1321,37 @@ impl ContentStore {
         } else {
             Hasher::new()
         };
-        
+
         // Stream new data while updating hash
         let mut buffer = vec![0u8; 64 * 1024];
         let mut bytes_written = 0u64;
-        
+
         loop {
             let n = reader.read(&mut buffer).await?;
             if n == 0 {
                 break;
             }
-            
+
             let chunk = &buffer[..n];
             hasher.update(chunk);
             file.write_all(chunk).await?;
             bytes_written += n as u64;
         }
-        
+
         file.flush().await?;
-        
+
         // Update partial transfer state
         partial.bytes_received += bytes_written;
         partial.hash_state = Some("state_placeholder".to_string()); // TODO: Serialize hasher state
-        
-        debug!("Resumed write: {} bytes added to {:?} (total: {})", 
-               bytes_written, partial.temp_path, partial.bytes_received);
-        
+
+        debug!(
+            "Resumed write: {} bytes added to {:?} (total: {})",
+            bytes_written, partial.temp_path, partial.bytes_received
+        );
+
         Ok(())
     }
-    
+
     /// Complete a resumable write operation, moving the temp file to final location.
     /// Verifies the final hash against expected hash if provided.
     ///
@@ -1297,19 +1366,23 @@ impl ContentStore {
         if partial.is_expired() {
             // Clean up expired transfer
             let _ = fs::remove_file(&partial.temp_path).await;
-            return Err(CasError::InvalidOperation("Partial transfer has expired".to_string()));
+            return Err(CasError::InvalidOperation(
+                "Partial transfer has expired".to_string(),
+            ));
         }
-        
+
         if !partial.temp_path.exists() {
-            return Err(CasError::InvalidOperation("Partial transfer file not found".to_string()));
+            return Err(CasError::InvalidOperation(
+                "Partial transfer file not found".to_string(),
+            ));
         }
-        
+
         // Re-compute hash from the complete file to verify integrity
         let mut file = File::open(&partial.temp_path).await?;
         let mut hasher = Hasher::new();
         let mut buffer = vec![0u8; 64 * 1024];
         let mut total_size = 0u64;
-        
+
         loop {
             let n = file.read(&mut buffer).await?;
             if n == 0 {
@@ -1318,9 +1391,9 @@ impl ContentStore {
             hasher.update(&buffer[..n]);
             total_size += n as u64;
         }
-        
+
         let computed_hash = ContentHash::from_blake3(hasher.finalize());
-        
+
         // Verify against expected hash if provided
         if let Some(expected) = partial.expected_hash {
             if computed_hash != expected {
@@ -1332,65 +1405,71 @@ impl ContentStore {
                 });
             }
         }
-        
+
         // Verify against expected size if provided
         if let Some(expected_size) = partial.total_size {
             if total_size != expected_size {
                 let _ = fs::remove_file(&partial.temp_path).await;
-                return Err(CasError::InvalidOperation(
-                    format!("Size mismatch: expected {}, got {}", expected_size, total_size)
-                ));
+                return Err(CasError::InvalidOperation(format!(
+                    "Size mismatch: expected {}, got {}",
+                    expected_size, total_size
+                )));
             }
         }
-        
+
         // Check if object already exists
         let object_path = self.object_path(&computed_hash);
         if object_path.exists() {
             // Remove temp file and return existing ref
             fs::remove_file(&partial.temp_path).await?;
-            
+
             let obj_ref = ObjectRef {
                 hash: computed_hash,
                 size: total_size,
             };
-            
+
             // Update dedup index
             {
                 let mut dedup = self.dedup_index.write().await;
                 dedup.insert(computed_hash, obj_ref.clone());
             }
-            
+
             return Ok(obj_ref);
         }
-        
+
         // Ensure shard directories exist
         if let Some(parent) = object_path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        
+
         // Move temp file to final location
         fs::rename(&partial.temp_path, &object_path).await?;
-        
+
         let obj_ref = ObjectRef {
             hash: computed_hash,
             size: total_size,
         };
-        
+
         // Update dedup index
         {
             let mut dedup = self.dedup_index.write().await;
             dedup.insert(computed_hash, obj_ref.clone());
         }
-        
+
         // Update stats
         self.stats.writes.fetch_add(1, Ordering::Relaxed);
-        self.stats.bytes_written.fetch_add(total_size, Ordering::Relaxed);
-        
-        debug!("Completed resumable write of {} ({} bytes)", computed_hash, total_size);
-        
+        self.stats
+            .bytes_written
+            .fetch_add(total_size, Ordering::Relaxed);
+
+        debug!(
+            "Completed resumable write of {} ({} bytes)",
+            computed_hash, total_size
+        );
+
         Ok(obj_ref)
     }
-    
+
     /// Cancel a resumable write operation, cleaning up temporary files.
     ///
     /// # Arguments
@@ -1403,7 +1482,7 @@ impl ContentStore {
         }
         Ok(())
     }
-    
+
     /// Clean up expired partial transfers.
     /// Should be called periodically for maintenance.
     pub async fn cleanup_expired_partials(&self) -> Result<usize> {
@@ -1411,10 +1490,10 @@ impl ContentStore {
         if !temp_dir.exists() {
             return Ok(0);
         }
-        
+
         let mut cleaned_count = 0;
         let now = std::time::SystemTime::now();
-        
+
         let mut dir = fs::read_dir(&temp_dir).await?;
         while let Some(entry) = dir.next_entry().await? {
             let path = entry.path();
@@ -1423,7 +1502,8 @@ impl ContentStore {
                     // Check if file is older than 24 hours
                     if let Ok(metadata) = entry.metadata().await {
                         if let Ok(created) = metadata.created() {
-                            if now.duration_since(created).unwrap_or_default().as_secs() > 24 * 3600 {
+                            if now.duration_since(created).unwrap_or_default().as_secs() > 24 * 3600
+                            {
                                 let _ = fs::remove_file(&path).await;
                                 cleaned_count += 1;
                                 debug!("Cleaned up expired partial: {:?}", path);
@@ -1433,10 +1513,10 @@ impl ContentStore {
                 }
             }
         }
-        
+
         Ok(cleaned_count)
     }
-    
+
     /// Get access to metrics collection
     pub fn get_metrics(&self) -> &ContentStoreRuntimeStats {
         &self.stats
@@ -1930,13 +2010,13 @@ impl ContentStore {
             dedup_hits: self.stats.dedup_hits.load(Ordering::Relaxed),
         }
     }
-    
+
     /// Prefetch chunks for improved performance
     pub async fn prefetch(&self, hashes: &[ContentHash]) -> Result<()> {
         if !self.config.cache_config.prefetch_enabled {
             return Ok(());
         }
-        
+
         for hash in hashes {
             // Check if already in cache
             {
@@ -1945,17 +2025,17 @@ impl ContentStore {
                     continue;
                 }
             }
-            
+
             // Try to read and cache
             match self.read(hash).await {
                 Ok(_) => trace!("Prefetched chunk {}", hash),
                 Err(e) => debug!("Failed to prefetch chunk {}: {}", hash, e),
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Clear the chunk cache
     pub async fn clear_cache(&self) {
         let mut cache = self.cache.write().await;
@@ -1963,7 +2043,7 @@ impl ContentStore {
         cache.total_size = 0;
         debug!("Cleared chunk cache");
     }
-    
+
     /// Get cache statistics
     pub async fn cache_stats(&self) -> CacheStats {
         let cache = self.cache.read().await;
@@ -1985,13 +2065,13 @@ impl ContentStore {
 
         let scanner = Arc::clone(&self);
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(
-                tokio::time::Duration::from_secs(scanner.config.scan_interval_secs)
-            );
-            
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+                scanner.config.scan_interval_secs,
+            ));
+
             loop {
                 interval.tick().await;
-                
+
                 debug!("Starting background integrity scan");
                 match scanner.verify_integrity().await {
                     Ok(report) => {
@@ -2231,7 +2311,7 @@ async fn verify_object_with_path(path: &Path, expected_hash: &ContentHash) -> Re
 
     // Read and verify hash
     let data = fs::read(path).await?;
-    
+
     // Verify that the read size matches the metadata
     if data.len() as u64 != metadata.len() {
         return Ok(false);

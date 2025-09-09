@@ -26,9 +26,7 @@ pub enum SimpleSyncMessage {
         reason: Option<String>,
     },
     /// File content data
-    FileData {
-        data: Vec<u8>,
-    },
+    FileData { data: Vec<u8> },
     /// Transfer complete acknowledgment
     TransferComplete {
         success: bool,
@@ -58,12 +56,12 @@ impl SimpleSyncMessage {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let bytes = self.to_bytes()?;
         let len = bytes.len() as u32;
-        
+
         // Write message length first
         writer.write_all(&len.to_be_bytes()).await?;
         // Write message data
         writer.write_all(&bytes).await?;
-        
+
         debug!("Sent SimpleSyncMessage: {:?}", self);
         Ok(())
     }
@@ -76,16 +74,16 @@ impl SimpleSyncMessage {
         let mut len_buf = [0u8; 4];
         reader.read_exact(&mut len_buf).await?;
         let len = u32::from_be_bytes(len_buf) as usize;
-        
+
         // Validate message size (max 100MB for file data)
         if len > 100 * 1024 * 1024 {
             return Err("Message too large".into());
         }
-        
+
         // Read message data
         let mut msg_buf = vec![0u8; len];
         reader.read_exact(&mut msg_buf).await?;
-        
+
         let message = Self::from_bytes(&msg_buf)?;
         debug!("Received SimpleSyncMessage: {:?}", message);
         Ok(message)
@@ -133,7 +131,10 @@ impl SimpleFileTransfer {
             SimpleSyncMessage::FileTransferResponse { accepted: true, .. } => {
                 info!("File transfer accepted, sending data");
             }
-            SimpleSyncMessage::FileTransferResponse { accepted: false, reason } => {
+            SimpleSyncMessage::FileTransferResponse {
+                accepted: false,
+                reason,
+            } => {
                 let reason = reason.unwrap_or_else(|| "Unknown reason".to_string());
                 return Err(format!("File transfer rejected: {}", reason).into());
             }
@@ -157,14 +158,18 @@ impl SimpleFileTransfer {
                 info!("File transfer completed successfully");
                 Ok(())
             }
-            SimpleSyncMessage::TransferComplete { success, checksum_verified, message } => {
-                error!("File transfer failed: success={}, checksum_verified={}, message={}", 
-                       success, checksum_verified, message);
+            SimpleSyncMessage::TransferComplete {
+                success,
+                checksum_verified,
+                message,
+            } => {
+                error!(
+                    "File transfer failed: success={}, checksum_verified={}, message={}",
+                    success, checksum_verified, message
+                );
                 Err(format!("Transfer failed: {}", message).into())
             }
-            _ => {
-                Err("Unexpected response to file transfer".into())
-            }
+            _ => Err("Unexpected response to file transfer".into()),
         }
     }
 
@@ -183,8 +188,15 @@ impl SimpleFileTransfer {
         // Wait for transfer request
         let request = SimpleSyncMessage::receive(reader).await?;
         let (file_path, file_size, expected_checksum) = match request {
-            SimpleSyncMessage::FileTransferRequest { file_path, file_size, checksum } => {
-                info!("Received file transfer request: {} ({} bytes)", file_path, file_size);
+            SimpleSyncMessage::FileTransferRequest {
+                file_path,
+                file_size,
+                checksum,
+            } => {
+                info!(
+                    "Received file transfer request: {} ({} bytes)",
+                    file_path, file_size
+                );
                 (file_path, file_size, checksum)
             }
             _ => {
@@ -227,7 +239,10 @@ impl SimpleFileTransfer {
         let checksum_valid = actual_checksum_hex == expected_checksum;
 
         if !checksum_valid {
-            error!("Checksum mismatch: expected {}, got {}", expected_checksum, actual_checksum_hex);
+            error!(
+                "Checksum mismatch: expected {}, got {}",
+                expected_checksum, actual_checksum_hex
+            );
             let error_response = SimpleSyncMessage::TransferComplete {
                 success: false,
                 checksum_verified: false,
@@ -277,7 +292,11 @@ mod tests {
         let decoded = SimpleSyncMessage::from_bytes(&bytes).unwrap();
 
         match decoded {
-            SimpleSyncMessage::FileTransferRequest { file_path, file_size, checksum } => {
+            SimpleSyncMessage::FileTransferRequest {
+                file_path,
+                file_size,
+                checksum,
+            } => {
                 assert_eq!(file_path, "test.txt");
                 assert_eq!(file_size, 1024);
                 assert_eq!(checksum, "abcd1234");

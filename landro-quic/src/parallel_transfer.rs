@@ -1,9 +1,9 @@
+use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
-use bytes::Bytes;
 
 use crate::errors::{QuicError, Result};
 
@@ -67,7 +67,11 @@ impl TransferManager {
         file_path: String,
         chunks: Vec<ChunkInfo>,
     ) -> Result<()> {
-        info!("Starting transfer: {} ({} chunks)", transfer_id, chunks.len());
+        info!(
+            "Starting transfer: {} ({} chunks)",
+            transfer_id,
+            chunks.len()
+        );
 
         let total_size = chunks.iter().map(|c| c.size).sum();
         let session = TransferSession {
@@ -83,21 +87,26 @@ impl TransferManager {
 
         // For v1.0, just log the transfer - actual QUIC streaming will be implemented later
         info!("Transfer {} queued: {} bytes", transfer_id, total_size);
-        
+
         Ok(())
     }
 
     /// Get transfer progress
     pub async fn get_progress(&self, transfer_id: &str) -> Option<(u64, u64)> {
         let transfers = self.active_transfers.read().await;
-        transfers.get(transfer_id).map(|s| (s.transferred, s.total_size))
+        transfers
+            .get(transfer_id)
+            .map(|s| (s.transferred, s.total_size))
     }
 
     /// Complete a transfer
     pub async fn complete_transfer(&self, transfer_id: &str) -> Result<()> {
         let mut transfers = self.active_transfers.write().await;
         if let Some(session) = transfers.remove(transfer_id) {
-            info!("Transfer completed: {} ({} bytes)", transfer_id, session.total_size);
+            info!(
+                "Transfer completed: {} ({} bytes)",
+                transfer_id, session.total_size
+            );
         }
         Ok(())
     }
@@ -116,7 +125,7 @@ impl TransferManager {
 pub trait ChunkProvider: Send + Sync {
     /// Get chunk data by hash
     fn get_chunk(&self, hash: &str) -> Result<Option<Bytes>>;
-    
+
     /// Store chunk data
     fn put_chunk(&self, hash: &str, data: Bytes) -> Result<()>;
 }
@@ -176,11 +185,14 @@ mod tests {
         ];
 
         // Start transfer
-        manager.start_transfer(
-            "test-transfer".to_string(),
-            "/test/file.txt".to_string(),
-            chunks,
-        ).await.unwrap();
+        manager
+            .start_transfer(
+                "test-transfer".to_string(),
+                "/test/file.txt".to_string(),
+                chunks,
+            )
+            .await
+            .unwrap();
 
         // Check progress
         let progress = manager.get_progress("test-transfer").await;
@@ -191,7 +203,7 @@ mod tests {
 
         // Complete transfer
         manager.complete_transfer("test-transfer").await.unwrap();
-        
+
         // Should be removed after completion
         let progress = manager.get_progress("test-transfer").await;
         assert!(progress.is_none());
@@ -201,14 +213,14 @@ mod tests {
     fn test_chunk_provider() {
         let provider = MemoryChunkProvider::new();
         let data = Bytes::from("test data");
-        
+
         // Store chunk
         provider.put_chunk("test-hash", data.clone()).unwrap();
-        
+
         // Retrieve chunk
         let retrieved = provider.get_chunk("test-hash").unwrap();
         assert_eq!(retrieved, Some(data));
-        
+
         // Non-existent chunk
         let missing = provider.get_chunk("missing").unwrap();
         assert_eq!(missing, None);

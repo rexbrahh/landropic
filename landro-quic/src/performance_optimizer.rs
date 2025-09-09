@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
-use crate::connection::Connection;
 use crate::config::QuicConfig;
+use crate::connection::Connection;
 use crate::pool::{ConnectionPool, PoolConfig};
 use crate::stream_transfer::StreamTransferConfig;
 
@@ -47,10 +47,10 @@ pub struct TransferProfile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FileType {
-    SmallFile,    // < 1MB
-    MediumFile,   // 1MB - 100MB
-    LargeFile,    // 100MB - 1GB
-    HugeFile,     // > 1GB
+    SmallFile,  // < 1MB
+    MediumFile, // 1MB - 100MB
+    LargeFile,  // 100MB - 1GB
+    HugeFile,   // > 1GB
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -82,7 +82,7 @@ impl PerformanceOptimizer {
     /// Create new performance optimizer
     pub fn new() -> Self {
         let mut baseline_configs = HashMap::new();
-        
+
         // Create baseline configurations for different file types
         baseline_configs.insert(FileType::SmallFile, Self::create_small_file_config());
         baseline_configs.insert(FileType::MediumFile, Self::create_medium_file_config());
@@ -125,7 +125,9 @@ impl PerformanceOptimizer {
         // Get baseline configuration for file type
         let baseline_config = {
             let baselines = self.baseline_configs.read().await;
-            baselines.get(&transfer_profile.file_type).cloned()
+            baselines
+                .get(&transfer_profile.file_type)
+                .cloned()
                 .unwrap_or_else(|| Self::create_medium_file_config())
         };
 
@@ -135,7 +137,8 @@ impl PerformanceOptimizer {
             transfer_profile,
             &network_condition,
             current_metrics.as_ref(),
-        ).await
+        )
+        .await
     }
 
     /// Apply adaptive optimizations based on current conditions
@@ -182,14 +185,14 @@ impl PerformanceOptimizer {
         // Priority-based optimizations
         match transfer_profile.priority {
             TransferPriority::Critical => {
-                config.stream_config.max_concurrent_streams = 
+                config.stream_config.max_concurrent_streams =
                     config.stream_config.max_concurrent_streams * 2;
-                config.pool_config.max_connections_per_peer = 
+                config.pool_config.max_connections_per_peer =
                     config.pool_config.max_connections_per_peer.max(4);
                 optimizations.push("critical priority");
             }
             TransferPriority::Low => {
-                config.stream_config.max_concurrent_streams = 
+                config.stream_config.max_concurrent_streams =
                     config.stream_config.max_concurrent_streams / 2;
                 optimizations.push("low priority");
             }
@@ -200,7 +203,7 @@ impl PerformanceOptimizer {
         if let Some(metrics) = metrics {
             if metrics.cpu_utilization > 80.0 {
                 // Reduce CPU load
-                config.stream_config.max_concurrent_streams = 
+                config.stream_config.max_concurrent_streams =
                     config.stream_config.max_concurrent_streams / 2;
                 config.stream_config.enable_compression = false;
                 optimizations.push("high CPU utilization");
@@ -209,16 +212,13 @@ impl PerformanceOptimizer {
             // Memory usage optimizations
             if metrics.memory_usage_mb > 1024 {
                 // Reduce memory usage
-                config.stream_config.stream_buffer_size = 
+                config.stream_config.stream_buffer_size =
                     config.stream_config.stream_buffer_size / 2;
                 optimizations.push("high memory usage");
             }
         }
 
-        config.optimization_reason = format!(
-            "Optimized for: {}", 
-            optimizations.join(", ")
-        );
+        config.optimization_reason = format!("Optimized for: {}", optimizations.join(", "));
 
         config
     }
@@ -226,7 +226,10 @@ impl PerformanceOptimizer {
     /// Assess network conditions based on metrics
     fn assess_network_condition(&self, metrics: &PerformanceMetrics) -> NetworkCondition {
         // Excellent: Low latency, high throughput, no loss
-        if metrics.rtt_ms < 50 && metrics.throughput_mbps > 100.0 && metrics.packet_loss_rate < 0.001 {
+        if metrics.rtt_ms < 50
+            && metrics.throughput_mbps > 100.0
+            && metrics.packet_loss_rate < 0.001
+        {
             return NetworkCondition::Excellent;
         }
 
@@ -249,8 +252,8 @@ impl PerformanceOptimizer {
         OptimizedConfig {
             stream_config: StreamTransferConfig {
                 max_concurrent_streams: 4,
-                stream_buffer_size: 256 * 1024, // 256KB
-                adaptive_flow_control: false, // Overhead not worth it for small files
+                stream_buffer_size: 256 * 1024,       // 256KB
+                adaptive_flow_control: false,         // Overhead not worth it for small files
                 flow_control_window: 4 * 1024 * 1024, // 4MB
                 backpressure_threshold: 0.9,
                 enable_stream_priority: false,
@@ -312,7 +315,7 @@ impl PerformanceOptimizer {
     fn create_huge_file_config() -> OptimizedConfig {
         OptimizedConfig {
             stream_config: StreamTransferConfig {
-                max_concurrent_streams: 32, // Fewer streams but larger buffers
+                max_concurrent_streams: 32,           // Fewer streams but larger buffers
                 stream_buffer_size: 32 * 1024 * 1024, // 32MB
                 adaptive_flow_control: true,
                 flow_control_window: 256 * 1024 * 1024, // 256MB
@@ -406,10 +409,10 @@ impl TransferProfile {
     /// Create transfer profile from file size
     pub fn from_file_size(file_size: u64) -> Self {
         let file_type = match file_size {
-            0..=1_048_576 => FileType::SmallFile,        // <= 1MB
-            1_048_577..=104_857_600 => FileType::MediumFile, // 1MB - 100MB
+            0..=1_048_576 => FileType::SmallFile,               // <= 1MB
+            1_048_577..=104_857_600 => FileType::MediumFile,    // 1MB - 100MB
             104_857_601..=1_073_741_824 => FileType::LargeFile, // 100MB - 1GB
-            _ => FileType::HugeFile,                     // > 1GB
+            _ => FileType::HugeFile,                            // > 1GB
         };
 
         Self {

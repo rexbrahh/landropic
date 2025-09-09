@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
-    
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

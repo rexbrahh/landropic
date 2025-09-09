@@ -38,21 +38,25 @@ pub async fn handle_quic_connection(
     _quic_tx: mpsc::Sender<QuicMessage>, // Unused in alpha, kept for compatibility
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Handling new QUIC connection with SimpleSyncMessage protocol");
-    
+
     // Open bidirectional stream for sync protocol
     let (mut send_stream, mut recv_stream) = connection.open_bi().await?;
-    
+
     // Get remote device info (will be populated after handshake)
-    let remote_device_id = connection.remote_device_id().await
+    let remote_device_id = connection
+        .remote_device_id()
+        .await
         .map(|id| hex::encode(&id))
         .unwrap_or_else(|| "unknown".to_string());
-    let remote_device_name = connection.remote_device_name().await
+    let remote_device_name = connection
+        .remote_device_name()
+        .await
         .unwrap_or_else(|| "unknown".to_string());
-    
+
     // Create database for sync state
     let db_path = PathBuf::from(".landropic/sync_state.db");
     let database = AsyncSyncDatabase::open(&db_path).await?;
-    
+
     // Create sync session
     let session = SyncSession::new(
         remote_device_id.clone(),
@@ -60,7 +64,7 @@ pub async fn handle_quic_connection(
         store.clone(),
         database,
     );
-    
+
     // Handle sync protocol messages
     loop {
         // Read message from stream
@@ -68,13 +72,13 @@ pub async fn handle_quic_connection(
         if recv_stream.read_exact(&mut len_buf).await.is_err() {
             break;
         }
-        
+
         let msg_len = u32::from_be_bytes(len_buf) as usize;
         let mut msg_buf = vec![0u8; msg_len];
         if recv_stream.read_exact(&mut msg_buf).await.is_err() {
             break;
         }
-        
+
         // Process message based on type
         match process_sync_message(&session, &msg_buf, &store).await {
             Ok(response) => {
@@ -91,7 +95,7 @@ pub async fn handle_quic_connection(
             }
         }
     }
-    
+
     info!("QUIC connection handler completed");
     Ok(())
 }
@@ -103,9 +107,9 @@ async fn process_sync_message(
     store: &Arc<ContentStore>,
 ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
     use crate::simple_sync_protocol::SimpleSyncMessage;
-    
+
     info!("Processing sync message of {} bytes", msg_data.len());
-    
+
     // Parse the incoming message
     let message = match SimpleSyncMessage::from_bytes(msg_data) {
         Ok(msg) => msg,
@@ -114,13 +118,20 @@ async fn process_sync_message(
             return Ok(None);
         }
     };
-    
+
     info!("Received SimpleSyncMessage: {:?}", message);
-    
+
     match message {
-        SimpleSyncMessage::FileTransferRequest { file_path, file_size, checksum } => {
-            info!("Handling file transfer request: {} ({} bytes)", file_path, file_size);
-            
+        SimpleSyncMessage::FileTransferRequest {
+            file_path,
+            file_size,
+            checksum,
+        } => {
+            info!(
+                "Handling file transfer request: {} ({} bytes)",
+                file_path, file_size
+            );
+
             // For alpha version, always accept transfers to a default sync folder
             let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
             let sync_folder = home_dir.join("LandropicSync");
@@ -130,7 +141,7 @@ async fn process_sync_message(
                 .and_then(|n| n.to_str())
                 .unwrap_or("received_file");
             let dest_path = sync_folder.join(file_name);
-            
+
             // Create sync folder if it doesn't exist
             if let Err(e) = tokio::fs::create_dir_all(&sync_folder).await {
                 error!("Failed to create sync folder: {}", e);
@@ -140,29 +151,29 @@ async fn process_sync_message(
                 };
                 return Ok(Some(response.to_bytes()?));
             }
-            
+
             // Accept the transfer
             let response = SimpleSyncMessage::FileTransferResponse {
                 accepted: true,
                 reason: None,
             };
-            
+
             info!("Accepting file transfer to: {}", dest_path.display());
             Ok(Some(response.to_bytes()?))
         }
-        
+
         SimpleSyncMessage::FileData { data } => {
             info!("Received file data: {} bytes", data.len());
-            
+
             // Calculate checksum and prepare response
             let checksum = blake3::hash(&data);
             let checksum_hex = hex::encode(checksum.as_bytes());
-            
+
             // Store the file data (simplified approach for alpha)
             let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
             let sync_folder = home_dir.join("LandropicSync");
             let temp_file = sync_folder.join("received_file.tmp");
-            
+
             match tokio::fs::write(&temp_file, &data).await {
                 Ok(()) => {
                     info!("File data saved to: {}", temp_file.display());
@@ -184,7 +195,7 @@ async fn process_sync_message(
                 }
             }
         }
-        
+
         _ => {
             info!("Unhandled message type: {:?}", message);
             Ok(None)

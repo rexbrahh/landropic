@@ -4,16 +4,16 @@
 //! designed for CLI consumption, integrating Bloom diff metrics, transfer stats,
 //! and resume capabilities.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::sync::{RwLock, mpsc, broadcast};
-use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{debug, info};
 
 use crate::bloom_diff::{DiffProgress, DiffStage};
-use crate::bloom_sync_integration::{EnhancedSyncStats, BloomSyncStats, BandwidthSavings};
-use crate::resume_manager::{ResumeStats, ResumeResult};
+use crate::bloom_sync_integration::{BandwidthSavings, BloomSyncStats, EnhancedSyncStats};
+use crate::resume_manager::{ResumeResult, ResumeStats};
 
 /// Real-time progress update for CLI
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,24 +22,24 @@ pub struct CliProgressUpdate {
     pub peer_id: String,
     pub folder_path: String,
     pub timestamp: SystemTime,
-    
+
     // Overall progress
     pub stage: ProgressStage,
     pub progress_percent: u8,
     pub eta_seconds: Option<u64>,
-    
+
     // Transfer stats
     pub transfer_stats: CliTransferStats,
-    
+
     // Bloom filter efficiency
     pub bloom_stats: CliBloomStats,
-    
+
     // Resume information
     pub resume_info: Option<CliResumeInfo>,
-    
+
     // Network status
     pub network_status: NetworkStatus,
-    
+
     // Performance metrics
     pub performance: PerformanceMetrics,
 }
@@ -139,14 +139,14 @@ impl CliProgressApi {
     /// Create new CLI progress API
     pub fn new(buffer_size: usize) -> Self {
         let (progress_tx, _) = broadcast::channel(buffer_size);
-        
+
         Self {
             active_sessions: Arc::new(RwLock::new(HashMap::new())),
             progress_tx,
             update_interval: Duration::from_millis(500), // Update every 500ms
         }
     }
-    
+
     /// Start tracking progress for a session
     pub async fn start_session_tracking(
         &self,
@@ -155,9 +155,9 @@ impl CliProgressApi {
         folder_path: String,
     ) -> mpsc::Receiver<ProgressCommand> {
         info!("📊 Starting CLI progress tracking for {}", session_id);
-        
+
         let (update_tx, update_rx) = mpsc::channel(100);
-        
+
         let initial_progress = CliProgressUpdate {
             session_id: session_id.clone(),
             peer_id: peer_id.clone(),
@@ -172,7 +172,7 @@ impl CliProgressApi {
             network_status: NetworkStatus::Stable,
             performance: PerformanceMetrics::default(),
         };
-        
+
         let session = SessionProgress {
             session_id: session_id.clone(),
             peer_id,
@@ -183,38 +183,44 @@ impl CliProgressApi {
             progress_history: vec![initial_progress.clone()],
             update_tx,
         };
-        
-        self.active_sessions.write().await.insert(session_id.clone(), session);
-        
+
+        self.active_sessions
+            .write()
+            .await
+            .insert(session_id.clone(), session);
+
         // Broadcast initial progress
         let _ = self.progress_tx.send(initial_progress);
-        
+
         // Start progress monitoring
         let self_clone = Arc::new(self.clone());
         tokio::spawn(async move {
             self_clone.monitor_session_progress(session_id).await;
         });
-        
+
         update_rx
     }
-    
+
     /// Subscribe to progress updates
     pub fn subscribe_to_progress(&self) -> broadcast::Receiver<CliProgressUpdate> {
         self.progress_tx.subscribe()
     }
-    
+
     /// Get current progress for a session
     pub async fn get_session_progress(&self, session_id: &str) -> Option<CliProgressUpdate> {
         let sessions = self.active_sessions.read().await;
         sessions.get(session_id).map(|s| s.current_progress.clone())
     }
-    
+
     /// Get progress for all active sessions
     pub async fn get_all_progress(&self) -> Vec<CliProgressUpdate> {
         let sessions = self.active_sessions.read().await;
-        sessions.values().map(|s| s.current_progress.clone()).collect()
+        sessions
+            .values()
+            .map(|s| s.current_progress.clone())
+            .collect()
     }
-    
+
     /// Update session with enhanced sync stats
     pub async fn update_from_enhanced_stats(
         &self,
@@ -224,21 +230,27 @@ impl CliProgressApi {
         progress_percent: u8,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut sessions = self.active_sessions.write().await;
-        
+
         if let Some(session) = sessions.get_mut(session_id) {
             // Update transfer stats
             session.current_progress.transfer_stats = CliTransferStats {
-                files_total: (enhanced_stats.traditional_stats.files_added + enhanced_stats.traditional_stats.files_modified) as u64,
-                files_completed: (enhanced_stats.traditional_stats.files_added + enhanced_stats.traditional_stats.files_modified) as u64,
+                files_total: (enhanced_stats.traditional_stats.files_added
+                    + enhanced_stats.traditional_stats.files_modified)
+                    as u64,
+                files_completed: (enhanced_stats.traditional_stats.files_added
+                    + enhanced_stats.traditional_stats.files_modified)
+                    as u64,
                 files_failed: 0, // TODO: Get from error stats
-                bytes_total: enhanced_stats.traditional_stats.bytes_sent + enhanced_stats.traditional_stats.bytes_received,
-                bytes_transferred: enhanced_stats.traditional_stats.bytes_sent + enhanced_stats.traditional_stats.bytes_received,
-                chunks_total: 0, // TODO: Calculate from files
+                bytes_total: enhanced_stats.traditional_stats.bytes_sent
+                    + enhanced_stats.traditional_stats.bytes_received,
+                bytes_transferred: enhanced_stats.traditional_stats.bytes_sent
+                    + enhanced_stats.traditional_stats.bytes_received,
+                chunks_total: 0,     // TODO: Calculate from files
                 chunks_completed: 0, // TODO: Calculate
                 current_speed_mbps: self.calculate_current_speed_mbps(session).await,
                 average_speed_mbps: self.calculate_average_speed_mbps(session).await,
             };
-            
+
             // Update Bloom stats
             session.current_progress.bloom_stats = CliBloomStats {
                 bandwidth_saved_percent: enhanced_stats.bandwidth_savings.total_savings_percent,
@@ -247,32 +259,36 @@ impl CliProgressApi {
                 filter_efficiency_percent: enhanced_stats.bloom_stats.filter_efficiency,
                 compression_ratio: enhanced_stats.bloom_stats.compression_ratio,
             };
-            
+
             // Update general progress
             session.current_progress.stage = stage.clone();
             session.current_progress.progress_percent = progress_percent;
             session.current_progress.timestamp = SystemTime::now();
             session.current_progress.eta_seconds = self.calculate_eta(session);
             session.last_update = SystemTime::now();
-            
+
             // Add to history
-            session.progress_history.push(session.current_progress.clone());
-            
+            session
+                .progress_history
+                .push(session.current_progress.clone());
+
             // Keep only last 100 updates in history
             if session.progress_history.len() > 100 {
                 session.progress_history.remove(0);
             }
-            
+
             // Broadcast update
             let _ = self.progress_tx.send(session.current_progress.clone());
-            
-            debug!("📈 Progress updated for {}: {}% at {:?}", 
-                session_id, progress_percent, stage);
+
+            debug!(
+                "📈 Progress updated for {}: {}% at {:?}",
+                session_id, progress_percent, stage
+            );
         }
-        
+
         Ok(())
     }
-    
+
     /// Update session with resume information
     pub async fn update_with_resume_info(
         &self,
@@ -281,7 +297,7 @@ impl CliProgressApi {
         resume_stats: &ResumeStats,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut sessions = self.active_sessions.write().await;
-        
+
         if let Some(session) = sessions.get_mut(session_id) {
             session.current_progress.resume_info = Some(CliResumeInfo {
                 is_resumed_session: resume_result.success,
@@ -290,20 +306,22 @@ impl CliProgressApi {
                 bytes_saved_by_resume: resume_result.bytes_saved,
                 time_saved_seconds: resume_result.time_saved.as_secs(),
             });
-            
+
             if resume_result.success {
                 session.current_progress.stage = ProgressStage::Resuming;
-                info!("🔄 Resume info updated: {} bytes saved, {} chunks skipped", 
-                    resume_result.bytes_saved, resume_result.chunks_skipped);
+                info!(
+                    "🔄 Resume info updated: {} bytes saved, {} chunks skipped",
+                    resume_result.bytes_saved, resume_result.chunks_skipped
+                );
             }
-            
+
             // Broadcast update
             let _ = self.progress_tx.send(session.current_progress.clone());
         }
-        
+
         Ok(())
     }
-    
+
     /// Update network status
     pub async fn update_network_status(
         &self,
@@ -311,57 +329,57 @@ impl CliProgressApi {
         status: NetworkStatus,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut sessions = self.active_sessions.write().await;
-        
+
         if let Some(session) = sessions.get_mut(session_id) {
             session.current_progress.network_status = status;
             session.current_progress.timestamp = SystemTime::now();
-            
+
             // Broadcast update
             let _ = self.progress_tx.send(session.current_progress.clone());
         }
-        
+
         Ok(())
     }
-    
+
     /// Complete session tracking
     pub async fn complete_session(&self, session_id: &str) {
         let mut sessions = self.active_sessions.write().await;
-        
+
         if let Some(session) = sessions.get_mut(session_id) {
             session.current_progress.stage = ProgressStage::Completed;
             session.current_progress.progress_percent = 100;
             session.current_progress.timestamp = SystemTime::now();
             session.current_progress.eta_seconds = Some(0);
-            
+
             // Final broadcast
             let _ = self.progress_tx.send(session.current_progress.clone());
-            
+
             info!("✅ Session {} completed", session_id);
         }
     }
-    
+
     /// Mark session as failed
     pub async fn fail_session(&self, session_id: &str, reason: String) {
         let mut sessions = self.active_sessions.write().await;
-        
+
         if let Some(session) = sessions.get_mut(session_id) {
             session.current_progress.stage = ProgressStage::Failed(reason.clone());
             session.current_progress.timestamp = SystemTime::now();
-            
+
             // Final broadcast
             let _ = self.progress_tx.send(session.current_progress.clone());
-            
+
             info!("❌ Session {} failed: {}", session_id, reason);
         }
     }
-    
+
     /// Get CLI-formatted progress summary
     pub async fn get_cli_summary(&self, session_id: &str) -> Option<String> {
         let sessions = self.active_sessions.read().await;
-        
+
         if let Some(session) = sessions.get(session_id) {
             let progress = &session.current_progress;
-            
+
             let stage_emoji = match progress.stage {
                 ProgressStage::Initializing => "🔄",
                 ProgressStage::ConnectingToPeer => "🔌",
@@ -373,19 +391,20 @@ impl CliProgressApi {
                 ProgressStage::Failed(_) => "❌",
                 ProgressStage::Resuming => "🔄",
             };
-            
-            let eta_text = progress.eta_seconds
+
+            let eta_text = progress
+                .eta_seconds
                 .map(|s| format!("ETA: {}s", s))
                 .unwrap_or_else(|| "ETA: --".to_string());
-            
+
             let speed_text = if progress.transfer_stats.current_speed_mbps > 0.0 {
                 format!("{:.1} MB/s", progress.transfer_stats.current_speed_mbps)
             } else {
                 "--".to_string()
             };
-            
+
             let bloom_savings = format!("{:.1}%", progress.bloom_stats.bandwidth_saved_percent);
-            
+
             Some(format!(
                 "{} {} {}% | {} | {} | Bloom: {} saved | {}",
                 stage_emoji,
@@ -400,72 +419,79 @@ impl CliProgressApi {
             None
         }
     }
-    
+
     // Private helper methods
-    
+
     async fn monitor_session_progress(&self, session_id: String) {
         let mut interval = tokio::time::interval(self.update_interval);
-        
+
         loop {
             interval.tick().await;
-            
+
             let session_exists = {
                 let sessions = self.active_sessions.read().await;
                 sessions.contains_key(&session_id)
             };
-            
+
             if !session_exists {
                 break;
             }
-            
+
             // Update performance metrics
             self.update_performance_metrics(&session_id).await;
-            
+
             // Check if session is complete or failed
             let should_stop = {
                 let sessions = self.active_sessions.read().await;
                 if let Some(session) = sessions.get(&session_id) {
-                    matches!(session.current_progress.stage, 
-                        ProgressStage::Completed | ProgressStage::Failed(_))
+                    matches!(
+                        session.current_progress.stage,
+                        ProgressStage::Completed | ProgressStage::Failed(_)
+                    )
                 } else {
                     true
                 }
             };
-            
+
             if should_stop {
                 break;
             }
         }
-        
+
         debug!("Stopped monitoring progress for {}", session_id);
     }
-    
+
     async fn update_performance_metrics(&self, session_id: &str) {
         // TODO: Implement actual performance monitoring
         // For now, use placeholder values
-        
+
         let mut sessions = self.active_sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
             session.current_progress.performance = PerformanceMetrics {
-                cpu_usage_percent: 15.0, // Placeholder
-                memory_usage_mb: 128.0,  // Placeholder
-                disk_io_mbps: 50.0,      // Placeholder
+                cpu_usage_percent: 15.0,           // Placeholder
+                memory_usage_mb: 128.0,            // Placeholder
+                disk_io_mbps: 50.0,                // Placeholder
                 network_utilization_percent: 75.0, // Placeholder
             };
         }
     }
-    
+
     async fn calculate_current_speed_mbps(&self, session: &SessionProgress) -> f64 {
         // Calculate based on recent transfer progress
         if session.progress_history.len() >= 2 {
             let recent = &session.progress_history[session.progress_history.len() - 1];
             let previous = &session.progress_history[session.progress_history.len() - 2];
-            
-            let bytes_delta = recent.transfer_stats.bytes_transferred
+
+            let bytes_delta = recent
+                .transfer_stats
+                .bytes_transferred
                 .saturating_sub(previous.transfer_stats.bytes_transferred);
-            let time_delta = recent.timestamp.duration_since(previous.timestamp)
-                .unwrap_or(Duration::from_secs(1)).as_secs_f64();
-            
+            let time_delta = recent
+                .timestamp
+                .duration_since(previous.timestamp)
+                .unwrap_or(Duration::from_secs(1))
+                .as_secs_f64();
+
             if time_delta > 0.0 {
                 (bytes_delta as f64 / time_delta) / (1024.0 * 1024.0) // Convert to MB/s
             } else {
@@ -475,23 +501,26 @@ impl CliProgressApi {
             0.0
         }
     }
-    
+
     async fn calculate_average_speed_mbps(&self, session: &SessionProgress) -> f64 {
-        let elapsed = session.started_at.elapsed().unwrap_or(Duration::from_secs(1));
+        let elapsed = session
+            .started_at
+            .elapsed()
+            .unwrap_or(Duration::from_secs(1));
         let bytes = session.current_progress.transfer_stats.bytes_transferred;
-        
+
         (bytes as f64 / elapsed.as_secs_f64()) / (1024.0 * 1024.0)
     }
-    
+
     fn calculate_eta(&self, session: &SessionProgress) -> Option<u64> {
         let progress = session.current_progress.progress_percent;
         if progress == 0 {
             return None;
         }
-        
+
         let elapsed = session.started_at.elapsed().unwrap_or(Duration::ZERO);
         let remaining_percent = 100 - progress;
-        
+
         if remaining_percent == 0 {
             Some(0)
         } else {
@@ -555,41 +584,45 @@ impl Default for PerformanceMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_cli_progress_api_creation() {
         let api = CliProgressApi::new(100);
         let progress = api.get_all_progress().await;
         assert!(progress.is_empty());
     }
-    
+
     #[tokio::test]
     async fn test_progress_subscription() {
         let api = CliProgressApi::new(10);
         let mut rx = api.subscribe_to_progress();
-        
-        let _cmd_rx = api.start_session_tracking(
-            "test_session".to_string(),
-            "peer1".to_string(),
-            "/test/path".to_string(),
-        ).await;
-        
+
+        let _cmd_rx = api
+            .start_session_tracking(
+                "test_session".to_string(),
+                "peer1".to_string(),
+                "/test/path".to_string(),
+            )
+            .await;
+
         // Should receive initial progress update
         let update = rx.recv().await.unwrap();
         assert_eq!(update.session_id, "test_session");
         assert_eq!(update.progress_percent, 0);
     }
-    
+
     #[tokio::test]
     async fn test_cli_summary_formatting() {
         let api = CliProgressApi::new(10);
-        
-        let _cmd_rx = api.start_session_tracking(
-            "test_session".to_string(),
-            "peer1".to_string(),
-            "/test/path".to_string(),
-        ).await;
-        
+
+        let _cmd_rx = api
+            .start_session_tracking(
+                "test_session".to_string(),
+                "peer1".to_string(),
+                "/test/path".to_string(),
+            )
+            .await;
+
         let summary = api.get_cli_summary("test_session").await;
         assert!(summary.is_some());
         assert!(summary.unwrap().contains("peer1"));
