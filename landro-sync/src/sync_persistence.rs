@@ -2,15 +2,15 @@
 //!
 //! Provides persistent storage of sync state to enable resume after interruptions
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-use crate::errors::{Result, SyncError};
 use crate::conflict_detection::{Conflict, ConflictType};
+use crate::errors::{Result, SyncError};
 use landro_index::manifest::Manifest;
 
 /// Status of a sync session
@@ -36,22 +36,22 @@ pub struct PersistedSyncSession {
     pub started_at: DateTime<Utc>,
     pub last_activity: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
-    
+
     /// Chunks that have been successfully transferred
     pub completed_chunks: std::collections::HashSet<String>,
     /// Chunks that still need to be transferred
     pub pending_chunks: std::collections::HashSet<String>,
     /// Chunks that failed transfer (for retry)
     pub failed_chunks: std::collections::HashSet<String>,
-    
+
     /// Detected conflicts during sync
     pub conflicts: Vec<Conflict>,
-    
+
     /// Progress statistics
     pub total_chunks: usize,
     pub total_bytes: u64,
     pub transferred_bytes: u64,
-    
+
     /// Resume metadata
     pub resume_token: Option<String>,
     pub checkpoint_data: Option<serde_json::Value>,
@@ -91,8 +91,7 @@ impl PersistedSyncSession {
 
     /// Check if session can be resumed
     pub fn can_resume(&self) -> bool {
-        matches!(self.status, SyncSessionStatus::Interrupted) 
-            && !self.pending_chunks.is_empty()
+        matches!(self.status, SyncSessionStatus::Interrupted) && !self.pending_chunks.is_empty()
     }
 
     /// Mark chunk as completed
@@ -179,7 +178,9 @@ impl SyncPersistenceManager {
         if !config.state_dir.exists() {
             tokio::fs::create_dir_all(&config.state_dir)
                 .await
-                .map_err(|e| SyncError::Storage(format!("Failed to create state directory: {}", e)))?;
+                .map_err(|e| {
+                    SyncError::Storage(format!("Failed to create state directory: {}", e))
+                })?;
         }
 
         let manager = Self {
@@ -197,9 +198,9 @@ impl SyncPersistenceManager {
     /// Start tracking a new sync session
     pub async fn start_session(&self, session: PersistedSyncSession) -> Result<()> {
         let session_id = session.session_id.clone();
-        
+
         info!("Starting sync session tracking: {}", session_id);
-        
+
         // Add to in-memory tracking
         {
             let mut sessions = self.sessions.write().await;
@@ -219,13 +220,18 @@ impl SyncPersistenceManager {
     }
 
     /// Update session with chunk completion
-    pub async fn mark_chunk_completed(&self, session_id: &str, chunk_hash: String, chunk_size: u64) -> Result<()> {
+    pub async fn mark_chunk_completed(
+        &self,
+        session_id: &str,
+        chunk_hash: String,
+        chunk_size: u64,
+    ) -> Result<()> {
         let should_save = {
             let mut sessions = self.sessions.write().await;
             if let Some(session) = sessions.get_mut(session_id) {
                 session.mark_chunk_completed(chunk_hash);
                 session.transferred_bytes += chunk_size;
-                
+
                 // Check if we should save to disk
                 let mut counter = self.chunk_counter.write().await;
                 let count = counter.entry(session_id.to_string()).or_insert(0);
@@ -272,14 +278,14 @@ impl SyncPersistenceManager {
     /// Complete a sync session
     pub async fn complete_session(&self, session_id: &str) -> Result<()> {
         info!("Completing sync session: {}", session_id);
-        
+
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
             session.complete();
             drop(sessions);
             self.save_session(session_id).await?;
         }
-        
+
         // Clean up chunk counter
         {
             let mut counter = self.chunk_counter.write().await;
@@ -292,7 +298,7 @@ impl SyncPersistenceManager {
     /// Mark session as interrupted (for resume)
     pub async fn interrupt_session(&self, session_id: &str) -> Result<()> {
         warn!("Interrupting sync session: {}", session_id);
-        
+
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
             session.interrupt();
@@ -352,7 +358,11 @@ impl SyncPersistenceManager {
             .map_err(|e| SyncError::Storage(format!("Failed to read state directory: {}", e)))?;
 
         let mut loaded_count = 0;
-        while let Some(entry) = dir.next_entry().await.map_err(|e| SyncError::Storage(format!("Failed to read directory entry: {}", e)))? {
+        while let Some(entry) = dir
+            .next_entry()
+            .await
+            .map_err(|e| SyncError::Storage(format!("Failed to read directory entry: {}", e)))?
+        {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 if let Ok(session) = self.load_session(&path).await {
@@ -484,8 +494,14 @@ mod tests {
         manager.start_session(session).await.unwrap();
 
         // Mark chunks as completed
-        manager.mark_chunk_completed("chunk-test", "chunk1".to_string(), 1024).await.unwrap();
-        manager.mark_chunk_completed("chunk-test", "chunk2".to_string(), 2048).await.unwrap();
+        manager
+            .mark_chunk_completed("chunk-test", "chunk1".to_string(), 1024)
+            .await
+            .unwrap();
+        manager
+            .mark_chunk_completed("chunk-test", "chunk2".to_string(), 2048)
+            .await
+            .unwrap();
 
         // Check progress
         let session = manager.get_session("chunk-test").await.unwrap();
@@ -515,7 +531,7 @@ mod tests {
         session.pending_chunks.insert("pending2".to_string());
 
         manager.start_session(session).await.unwrap();
-        
+
         // Interrupt the session
         manager.interrupt_session("resume-test").await.unwrap();
 

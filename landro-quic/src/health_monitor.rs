@@ -1,5 +1,5 @@
 //! Connection health monitoring and recovery for Day 2 implementation
-//! 
+//!
 //! This provides real-time health monitoring of QUIC connections with automatic
 //! recovery and performance metrics tracking.
 
@@ -56,7 +56,7 @@ impl Default for HealthConfig {
         Self {
             check_interval: Duration::from_secs(5),
             unhealthy_threshold: Duration::from_secs(30),
-            max_rtt_ms: 500, // 500ms max RTT
+            max_rtt_ms: 500,            // 500ms max RTT
             max_packet_loss_rate: 0.05, // 5% max packet loss
             enable_auto_recovery: true,
             recovery_timeout: Duration::from_secs(10),
@@ -93,10 +93,13 @@ impl ConnectionHealthMonitor {
         }
         *active = true;
 
-        info!("Starting connection health monitoring (interval: {:?})", self.config.check_interval);
-        
+        info!(
+            "Starting connection health monitoring (interval: {:?})",
+            self.config.check_interval
+        );
+
         self.start_monitoring_task().await;
-        
+
         info!("Connection health monitoring started successfully");
         Ok(())
     }
@@ -105,14 +108,14 @@ impl ConnectionHealthMonitor {
     pub async fn stop(&self) {
         let mut active = self.monitoring_active.lock().await;
         *active = false;
-        
+
         // Cancel all recovery tasks
         let mut recovery_tasks = self.recovery_tasks.lock().await;
         for (peer_id, handle) in recovery_tasks.drain() {
             handle.abort();
             debug!("Cancelled recovery task for peer: {}", peer_id);
         }
-        
+
         info!("Connection health monitoring stopped");
     }
 
@@ -130,7 +133,7 @@ impl ConnectionHealthMonitor {
     /// Get health summary
     pub async fn get_health_summary(&self) -> HealthSummary {
         let metrics = self.metrics.read().await;
-        
+
         let mut summary = HealthSummary {
             total_connections: metrics.len(),
             healthy_connections: 0,
@@ -188,12 +191,9 @@ impl ConnectionHealthMonitor {
                 }
 
                 // Health check all connections
-                if let Err(e) = Self::perform_health_check(
-                    &pool,
-                    &metrics,
-                    &config,
-                    &recovery_tasks,
-                ).await {
+                if let Err(e) =
+                    Self::perform_health_check(&pool, &metrics, &config, &recovery_tasks).await
+                {
                     error!("Error during health check: {}", e);
                 }
             }
@@ -209,10 +209,12 @@ impl ConnectionHealthMonitor {
         config: &HealthConfig,
         recovery_tasks: &Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        
         // Get current pool status (would need to add this method to ConnectionPool)
         let pool_stats = pool.get_pool_stats().await;
-        debug!("Health check: {} total connections", pool_stats.total_connections);
+        debug!(
+            "Health check: {} total connections",
+            pool_stats.total_connections
+        );
 
         let mut updated_metrics = HashMap::new();
         let now = Instant::now();
@@ -220,7 +222,7 @@ impl ConnectionHealthMonitor {
         // Check each connection's health
         for (peer_addr, connection_count) in pool_stats.connections_per_peer {
             let connection_id = format!("{}:{}", peer_addr.ip(), peer_addr.port());
-            
+
             // Create or update metrics
             let current_metrics = {
                 let metrics_read = metrics.read().await;
@@ -261,7 +263,8 @@ impl ConnectionHealthMonitor {
                     pool.clone(),
                     recovery_tasks.clone(),
                     config.clone(),
-                ).await;
+                )
+                .await;
             }
 
             updated_metrics.insert(connection_id, new_metrics);
@@ -310,7 +313,7 @@ impl ConnectionHealthMonitor {
         config: HealthConfig,
     ) {
         let peer_id = peer_addr.to_string();
-        
+
         // Check if recovery already in progress
         {
             let tasks = recovery_tasks.lock().await;
@@ -324,13 +327,13 @@ impl ConnectionHealthMonitor {
         let peer_id_clone = peer_id.clone();
         let recovery_task = tokio::spawn(async move {
             info!("Starting connection recovery for {}", peer_id_clone);
-            
+
             // Remove unhealthy connections from pool
             pool.remove_peer_connections(peer_addr).await;
-            
+
             // Wait for recovery timeout
             tokio::time::sleep(config.recovery_timeout).await;
-            
+
             // Try to establish new connection
             match pool.get_connection(peer_addr).await {
                 Ok(_) => {
@@ -366,4 +369,3 @@ pub struct PoolStats {
     pub total_connections: usize,
     pub connections_per_peer: HashMap<std::net::SocketAddr, usize>,
 }
-

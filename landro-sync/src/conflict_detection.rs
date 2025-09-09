@@ -2,10 +2,10 @@
 //!
 //! Provides simple conflict detection for file synchronization
 
-use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::{Duration, SystemTime};
 use tracing::{debug, info, warn};
 
 use crate::errors::{Result, SyncError};
@@ -90,16 +90,16 @@ impl ConflictDetector {
         last_sync_time: Option<DateTime<Utc>>,
     ) -> Result<Vec<Conflict>> {
         info!("Detecting conflicts between manifests");
-        
+
         let mut conflicts = Vec::new();
-        
+
         // Build lookup maps for efficiency
         let local_files: HashMap<String, &ManifestEntry> = local_manifest
             .files
             .iter()
             .map(|entry| (entry.path.clone(), entry))
             .collect();
-            
+
         let remote_files: HashMap<String, &ManifestEntry> = remote_manifest
             .files
             .iter()
@@ -144,7 +144,7 @@ impl ConflictDetector {
                     if let Some(last_sync) = last_sync_time {
                         let local_modified_since = local.modified_at > last_sync;
                         let remote_modified_since = remote.modified_at > last_sync;
-                        
+
                         if local_modified_since && remote_modified_since {
                             // Both modified - conflict!
                             return Ok(Some(Conflict {
@@ -169,7 +169,7 @@ impl ConflictDetector {
                     }
                 }
             }
-            
+
             // File exists only locally (remote deleted or never existed)
             (Some(local), None) => {
                 if let Some(last_sync) = last_sync_time {
@@ -186,7 +186,7 @@ impl ConflictDetector {
                     }
                 }
             }
-            
+
             // File exists only remotely (local deleted or never existed)
             (None, Some(remote)) => {
                 if let Some(last_sync) = last_sync_time {
@@ -203,7 +203,7 @@ impl ConflictDetector {
                     }
                 }
             }
-            
+
             // File doesn't exist on either side
             (None, None) => {
                 // No conflict
@@ -255,7 +255,7 @@ impl ConflictDetector {
         };
 
         conflict.resolved = matches!(resolution, ConflictResolution::Manual) == false;
-        
+
         info!(
             "Auto-resolved conflict for {} using strategy {:?}",
             conflict.file_path, resolution
@@ -288,9 +288,10 @@ impl ConflictDetector {
     /// Clear all resolved conflicts
     pub fn clear_resolved_conflicts(&mut self) {
         let before_count = self.detected_conflicts.len();
-        self.detected_conflicts.retain(|_, conflict| !conflict.resolved);
+        self.detected_conflicts
+            .retain(|_, conflict| !conflict.resolved);
         let after_count = self.detected_conflicts.len();
-        
+
         if before_count != after_count {
             info!(
                 "Cleared {} resolved conflicts, {} remaining",
@@ -321,16 +322,21 @@ mod tests {
     #[test]
     fn test_both_modified_conflict() {
         let mut detector = ConflictDetector::new(ConflictDetectionConfig::default());
-        
+
         let local_entry = create_test_entry("test.txt", "hash1", 5);
         let remote_entry = create_test_entry("test.txt", "hash2", 3);
-        
+
         let last_sync = Utc::now() - chrono::Duration::minutes(10);
-        
+
         let conflict = detector
-            .check_file_conflict("test.txt", Some(&local_entry), Some(&remote_entry), Some(last_sync))
+            .check_file_conflict(
+                "test.txt",
+                Some(&local_entry),
+                Some(&remote_entry),
+                Some(last_sync),
+            )
             .unwrap();
-            
+
         assert!(conflict.is_some());
         let conflict = conflict.unwrap();
         assert_eq!(conflict.conflict_type, ConflictType::BothModified);
@@ -345,7 +351,7 @@ mod tests {
             auto_resolve: true,
             ..Default::default()
         });
-        
+
         let mut conflict = Conflict {
             file_path: "test.txt".to_string(),
             conflict_type: ConflictType::BothModified,
@@ -354,7 +360,7 @@ mod tests {
             detected_at: Utc::now(),
             resolved: false,
         };
-        
+
         let resolution = detector.auto_resolve_conflict(&mut conflict).unwrap();
         assert_eq!(resolution, ConflictResolution::KeepRemote);
         assert!(conflict.resolved);
@@ -363,14 +369,14 @@ mod tests {
     #[test]
     fn test_no_conflict_same_content() {
         let detector = ConflictDetector::new(ConflictDetectionConfig::default());
-        
+
         let local_entry = create_test_entry("test.txt", "same_hash", 5);
         let remote_entry = create_test_entry("test.txt", "same_hash", 3);
-        
+
         let conflict = detector
             .check_file_conflict("test.txt", Some(&local_entry), Some(&remote_entry), None)
             .unwrap();
-            
+
         assert!(conflict.is_none());
     }
 }

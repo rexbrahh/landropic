@@ -79,7 +79,9 @@ impl IntegrationTestFramework {
     }
 
     /// Run comprehensive QUIC layer tests
-    pub async fn run_comprehensive_tests(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn run_comprehensive_tests(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Starting comprehensive QUIC integration tests");
 
         let test_scenarios = self.create_test_scenarios();
@@ -87,7 +89,7 @@ impl IntegrationTestFramework {
         for scenario in test_scenarios {
             info!("Running test scenario: {}", scenario.name);
             let result = self.run_test_scenario(scenario).await?;
-            
+
             let mut results = self.results.write().await;
             results.push(result);
         }
@@ -175,7 +177,10 @@ impl IntegrationTestFramework {
     }
 
     /// Run a single test scenario
-    async fn run_test_scenario(&self, scenario: TestScenario) -> Result<TestResults, Box<dyn std::error::Error + Send + Sync>> {
+    async fn run_test_scenario(
+        &self,
+        scenario: TestScenario,
+    ) -> Result<TestResults, Box<dyn std::error::Error + Send + Sync>> {
         let start_time = Instant::now();
         let mut test_result = TestResults {
             scenario_name: scenario.name.clone(),
@@ -194,13 +199,18 @@ impl IntegrationTestFramework {
 
         // Create test files
         let test_files = self.create_test_files(&scenario).await?;
-        test_result.total_bytes = scenario.file_sizes.iter().sum::<u64>() * scenario.peer_count as u64;
+        test_result.total_bytes =
+            scenario.file_sizes.iter().sum::<u64>() * scenario.peer_count as u64;
 
         // Apply network conditions
-        self.apply_network_conditions(&scenario.network_conditions).await;
+        self.apply_network_conditions(&scenario.network_conditions)
+            .await;
 
         // Run the actual test
-        match self.execute_file_transfers(&scenario, &test_files, &clients).await {
+        match self
+            .execute_file_transfers(&scenario, &test_files, &clients)
+            .await
+        {
             Ok(transfer_results) => {
                 test_result.success = true;
                 test_result.files_transferred = transfer_results.files_completed;
@@ -216,7 +226,8 @@ impl IntegrationTestFramework {
         // Calculate performance metrics
         test_result.total_duration = start_time.elapsed();
         if test_result.total_duration.as_secs() > 0 {
-            let throughput_bps = test_result.total_bytes as f64 / test_result.total_duration.as_secs_f64();
+            let throughput_bps =
+                test_result.total_bytes as f64 / test_result.total_duration.as_secs_f64();
             test_result.average_throughput_mbps = (throughput_bps * 8.0) / (1024.0 * 1024.0);
         }
 
@@ -226,7 +237,11 @@ impl IntegrationTestFramework {
         info!(
             "Test scenario '{}' completed: {} in {:?}",
             scenario.name,
-            if test_result.success { "SUCCESS" } else { "FAILED" },
+            if test_result.success {
+                "SUCCESS"
+            } else {
+                "FAILED"
+            },
             test_result.total_duration
         );
 
@@ -247,8 +262,7 @@ impl IntegrationTestFramework {
             let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
 
             // Create server
-            let config = QuicConfig::file_sync_optimized()
-                .bind_addr(addr);
+            let config = QuicConfig::file_sync_optimized().bind_addr(addr);
             let server = QuicServer::new(config).await?;
             server.start().await?;
             servers.push(server);
@@ -330,13 +344,13 @@ impl IntegrationTestFramework {
 
         // Simulate successful transfers based on scenario parameters
         let expected_transfers = test_files.len() * scenario.concurrent_transfers;
-        
+
         // Add some realistic completion simulation
         let transfer_duration = scenario.expected_completion_time / 2; // Assume faster than expected
         tokio::time::sleep(transfer_duration).await;
 
         results.files_completed = expected_transfers;
-        
+
         // Simulate some failures for resilience tests
         match scenario.network_conditions {
             NetworkCondition::Intermittent => {
@@ -393,20 +407,37 @@ impl IntegrationTestFramework {
         report.push_str(&format!("- Total Tests: {}\n", total_tests));
         report.push_str(&format!("- Successful: {}\n", successful_tests));
         report.push_str(&format!("- Failed: {}\n", failed_tests));
-        report.push_str(&format!("- Success Rate: {:.1}%\n\n", 
-            (successful_tests as f64 / total_tests as f64) * 100.0));
+        report.push_str(&format!(
+            "- Success Rate: {:.1}%\n\n",
+            (successful_tests as f64 / total_tests as f64) * 100.0
+        ));
 
         for result in results.iter() {
             report.push_str(&format!("## {}\n", result.scenario_name));
-            report.push_str(&format!("- Status: {}\n", 
-                if result.success { "✅ PASSED" } else { "❌ FAILED" }));
+            report.push_str(&format!(
+                "- Status: {}\n",
+                if result.success {
+                    "✅ PASSED"
+                } else {
+                    "❌ FAILED"
+                }
+            ));
             report.push_str(&format!("- Duration: {:?}\n", result.total_duration));
-            report.push_str(&format!("- Files Transferred: {}\n", result.files_transferred));
+            report.push_str(&format!(
+                "- Files Transferred: {}\n",
+                result.files_transferred
+            ));
             report.push_str(&format!("- Total Bytes: {}\n", result.total_bytes));
-            report.push_str(&format!("- Average Throughput: {:.2} Mbps\n", result.average_throughput_mbps));
-            report.push_str(&format!("- Connection Failures: {}\n", result.connection_failures));
+            report.push_str(&format!(
+                "- Average Throughput: {:.2} Mbps\n",
+                result.average_throughput_mbps
+            ));
+            report.push_str(&format!(
+                "- Connection Failures: {}\n",
+                result.connection_failures
+            ));
             report.push_str(&format!("- Reconnections: {}\n", result.reconnections));
-            
+
             if !result.errors.is_empty() {
                 report.push_str("- Errors:\n");
                 for error in &result.errors {
@@ -421,8 +452,14 @@ impl IntegrationTestFramework {
 
         // Print summary to console
         println!("\n📊 QUIC Integration Test Results:");
-        println!("   Total: {} | Passed: {} | Failed: {}", total_tests, successful_tests, failed_tests);
-        println!("   Success Rate: {:.1}%", (successful_tests as f64 / total_tests as f64) * 100.0);
+        println!(
+            "   Total: {} | Passed: {} | Failed: {}",
+            total_tests, successful_tests, failed_tests
+        );
+        println!(
+            "   Success Rate: {:.1}%",
+            (successful_tests as f64 / total_tests as f64) * 100.0
+        );
 
         Ok(())
     }

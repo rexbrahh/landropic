@@ -1,21 +1,21 @@
 //! Bloom filter-based diff protocol for efficient sync
-//! 
+//!
 //! This module implements a bandwidth-efficient diff protocol using Bloom filters
 //! to minimize data transfer during synchronization. It achieves ~90% bandwidth
 //! savings for similar manifests by using probabilistic set membership testing.
 
+use serde::{Deserialize, Serialize};
+use siphasher::sip::SipHasher24;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
-use siphasher::sip::SipHasher24;
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use landro_index::{Manifest};
 use landro_index::manifest::ManifestEntry;
+use landro_index::Manifest;
 
 /// Bloom filter implementation for probabilistic set membership testing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,9 +33,9 @@ impl BloomFilter {
         // Calculate optimal parameters
         let num_bits = Self::optimal_num_bits(expected_elements, false_positive_rate);
         let num_hashes = Self::optimal_num_hashes(num_bits, expected_elements);
-        
+
         let byte_size = (num_bits + 7) / 8;
-        
+
         Self {
             bits: vec![0; byte_size],
             num_bits,
@@ -44,19 +44,19 @@ impl BloomFilter {
             false_positive_rate,
         }
     }
-    
+
     /// Calculate optimal number of bits for given parameters
     fn optimal_num_bits(n: usize, p: f64) -> usize {
         let ln2 = std::f64::consts::LN_2;
         (-(n as f64 * p.ln()) / (ln2 * ln2)).ceil() as usize
     }
-    
+
     /// Calculate optimal number of hash functions
     fn optimal_num_hashes(m: usize, n: usize) -> usize {
         let ln2 = std::f64::consts::LN_2;
         ((m as f64 / n as f64) * ln2).round().max(1.0) as usize
     }
-    
+
     /// Add an element to the filter
     pub fn add<T: Hash>(&mut self, item: &T) {
         for i in 0..self.num_hashes {
@@ -68,7 +68,7 @@ impl BloomFilter {
         }
         self.num_elements += 1;
     }
-    
+
     /// Test if an element might be in the set
     pub fn contains<T: Hash>(&self, item: &T) -> bool {
         for i in 0..self.num_hashes {
@@ -82,19 +82,19 @@ impl BloomFilter {
         }
         true
     }
-    
+
     /// Generate hash for an item with seed
     fn hash<T: Hash>(&self, item: &T, seed: usize) -> usize {
         let mut hasher = SipHasher24::new_with_keys(seed as u64, seed as u64);
         item.hash(&mut hasher);
         hasher.finish() as usize
     }
-    
+
     /// Get the size of the filter in bytes
     pub fn size_bytes(&self) -> usize {
         self.bits.len()
     }
-    
+
     /// Calculate current false positive probability
     pub fn current_fpp(&self) -> f64 {
         let m = self.num_bits as f64;
@@ -122,21 +122,21 @@ impl ManifestSummary {
     pub fn from_manifest(manifest: &Manifest, device_id: String, root_path: PathBuf) -> Self {
         let file_count = manifest.files.len();
         let total_size: u64 = manifest.files.iter().map(|f| f.size).sum();
-        
+
         // Create Bloom filters with 1% false positive rate
         let mut path_filter = BloomFilter::new(file_count.max(100), 0.01);
         let mut hash_filter = BloomFilter::new(file_count.max(100), 0.01);
-        
+
         // Add all files to filters
         for file in &manifest.files {
             path_filter.add(&file.path);
             hash_filter.add(&file.content_hash);
         }
-        
+
         // Calculate manifest checksum
         let manifest_data = format!("{:?}", manifest);
         let manifest_checksum = blake3::hash(manifest_data.as_bytes()).into();
-        
+
         Self {
             device_id,
             root_path,
@@ -148,22 +148,22 @@ impl ManifestSummary {
             manifest_checksum,
         }
     }
-    
+
     /// Estimate similarity with another summary
     pub fn estimate_similarity(&self, other: &ManifestSummary) -> f64 {
         if self.file_count == 0 || other.file_count == 0 {
             return 0.0;
         }
-        
+
         // Quick check: if checksums match, manifests are identical
         if self.manifest_checksum == other.manifest_checksum {
             return 1.0;
         }
-        
+
         // Estimate based on filter overlap
         let max_count = self.file_count.max(other.file_count) as f64;
         let min_count = self.file_count.min(other.file_count) as f64;
-        
+
         // Basic similarity metric
         min_count / max_count
     }
@@ -173,35 +173,32 @@ impl ManifestSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DiffProtocolMessage {
     /// Request manifest summary
-    RequestSummary {
-        path: PathBuf,
-        request_id: String,
-    },
-    
+    RequestSummary { path: PathBuf, request_id: String },
+
     /// Send manifest summary
     SendSummary {
         summary: ManifestSummary,
         request_id: String,
     },
-    
+
     /// Request detailed diff for suspected differences
     RequestDiffDetails {
         suspected_paths: Vec<String>,
         request_id: String,
     },
-    
+
     /// Send detailed diff information
     SendDiffDetails {
         file_details: HashMap<String, ManifestEntry>,
         request_id: String,
     },
-    
+
     /// Request specific chunks
     RequestChunks {
         chunk_hashes: Vec<String>,
         request_id: String,
     },
-    
+
     /// Acknowledge receipt
     Acknowledge {
         request_id: String,
@@ -251,7 +248,7 @@ impl DiffProtocolHandler {
             progress: Arc::new(RwLock::new(HashMap::new())),
         }
     }
-    
+
     /// Start a diff operation with a peer
     pub async fn start_diff(
         &self,
@@ -259,13 +256,17 @@ impl DiffProtocolHandler {
         path: PathBuf,
         local_manifest: Manifest,
     ) -> Result<DiffProtocolMessage, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Starting diff protocol with {} for {}", peer_id, path.display());
-        
+        info!(
+            "Starting diff protocol with {} for {}",
+            peer_id,
+            path.display()
+        );
+
         // Store local manifest
         let mut manifests = self.manifests.write().await;
         manifests.insert(path.clone(), local_manifest.clone());
         drop(manifests);
-        
+
         // Initialize progress tracking
         let progress = DiffProgress {
             peer_id: peer_id.clone(),
@@ -277,19 +278,23 @@ impl DiffProtocolHandler {
             started_at: SystemTime::now(),
             estimated_completion: None,
         };
-        
+
         let mut progress_map = self.progress.write().await;
         progress_map.insert(peer_id.clone(), progress);
         drop(progress_map);
-        
+
         // Create request
-        let request_id = format!("{}-{}", self.device_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
-        Ok(DiffProtocolMessage::RequestSummary {
-            path,
-            request_id,
-        })
+        let request_id = format!(
+            "{}-{}",
+            self.device_id,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+        Ok(DiffProtocolMessage::RequestSummary { path, request_id })
     }
-    
+
     /// Handle incoming protocol message
     pub async fn handle_message(
         &self,
@@ -299,29 +304,38 @@ impl DiffProtocolHandler {
             DiffProtocolMessage::RequestSummary { path, request_id } => {
                 self.handle_summary_request(path, request_id).await
             }
-            
-            DiffProtocolMessage::SendSummary { summary, request_id } => {
-                self.handle_summary_response(summary, request_id).await
+
+            DiffProtocolMessage::SendSummary {
+                summary,
+                request_id,
+            } => self.handle_summary_response(summary, request_id).await,
+
+            DiffProtocolMessage::RequestDiffDetails {
+                suspected_paths,
+                request_id,
+            } => {
+                self.handle_details_request(suspected_paths, request_id)
+                    .await
             }
-            
-            DiffProtocolMessage::RequestDiffDetails { suspected_paths, request_id } => {
-                self.handle_details_request(suspected_paths, request_id).await
-            }
-            
-            DiffProtocolMessage::SendDiffDetails { file_details, request_id } => {
-                self.handle_details_response(file_details, request_id).await
-            }
-            
-            DiffProtocolMessage::RequestChunks { chunk_hashes, request_id } => {
-                self.handle_chunks_request(chunk_hashes, request_id).await
-            }
-            
-            DiffProtocolMessage::Acknowledge { request_id, success, message } => {
-                self.handle_acknowledge(request_id, success, message).await
-            }
+
+            DiffProtocolMessage::SendDiffDetails {
+                file_details,
+                request_id,
+            } => self.handle_details_response(file_details, request_id).await,
+
+            DiffProtocolMessage::RequestChunks {
+                chunk_hashes,
+                request_id,
+            } => self.handle_chunks_request(chunk_hashes, request_id).await,
+
+            DiffProtocolMessage::Acknowledge {
+                request_id,
+                success,
+                message,
+            } => self.handle_acknowledge(request_id, success, message).await,
         }
     }
-    
+
     /// Handle summary request
     async fn handle_summary_request(
         &self,
@@ -329,14 +343,10 @@ impl DiffProtocolHandler {
         request_id: String,
     ) -> Result<Option<DiffProtocolMessage>, Box<dyn std::error::Error + Send + Sync>> {
         let manifests = self.manifests.read().await;
-        
+
         if let Some(manifest) = manifests.get(&path) {
-            let summary = ManifestSummary::from_manifest(
-                manifest,
-                self.device_id.clone(),
-                path,
-            );
-            
+            let summary = ManifestSummary::from_manifest(manifest, self.device_id.clone(), path);
+
             Ok(Some(DiffProtocolMessage::SendSummary {
                 summary,
                 request_id,
@@ -349,7 +359,7 @@ impl DiffProtocolHandler {
             }))
         }
     }
-    
+
     /// Handle summary response
     async fn handle_summary_response(
         &self,
@@ -360,7 +370,7 @@ impl DiffProtocolHandler {
         let mut summaries = self.summaries.write().await;
         summaries.insert(summary.device_id.clone(), summary.clone());
         drop(summaries);
-        
+
         // Update progress
         let mut progress_map = self.progress.write().await;
         if let Some(progress) = progress_map.get_mut(&summary.device_id) {
@@ -368,7 +378,7 @@ impl DiffProtocolHandler {
             progress.progress_percent = 25;
         }
         drop(progress_map);
-        
+
         // Compare with local manifest
         let manifests = self.manifests.read().await;
         if let Some(local_manifest) = manifests.get(&summary.root_path) {
@@ -377,10 +387,10 @@ impl DiffProtocolHandler {
                 self.device_id.clone(),
                 summary.root_path.clone(),
             );
-            
+
             let similarity = local_summary.estimate_similarity(&summary);
             info!("Manifest similarity: {:.2}%", similarity * 100.0);
-            
+
             // Find suspected differences
             let mut suspected_paths = Vec::new();
             for file in &local_manifest.files {
@@ -388,19 +398,19 @@ impl DiffProtocolHandler {
                     suspected_paths.push(file.path.clone());
                 }
             }
-            
+
             // Calculate bandwidth saved
             let full_manifest_size = bincode::serialize(local_manifest)?.len();
             let summary_size = bincode::serialize(&summary)?.len();
             let bytes_saved = full_manifest_size.saturating_sub(summary_size);
-            
+
             let mut progress_map = self.progress.write().await;
             if let Some(progress) = progress_map.get_mut(&summary.device_id) {
                 progress.bytes_saved = bytes_saved as u64;
                 progress.differences_found = suspected_paths.len();
             }
             drop(progress_map);
-            
+
             if !suspected_paths.is_empty() {
                 Ok(Some(DiffProtocolMessage::RequestDiffDetails {
                     suspected_paths,
@@ -417,7 +427,7 @@ impl DiffProtocolHandler {
             Ok(None)
         }
     }
-    
+
     /// Handle details request
     async fn handle_details_request(
         &self,
@@ -426,7 +436,7 @@ impl DiffProtocolHandler {
     ) -> Result<Option<DiffProtocolMessage>, Box<dyn std::error::Error + Send + Sync>> {
         let manifests = self.manifests.read().await;
         let mut file_details = HashMap::new();
-        
+
         for (_, manifest) in manifests.iter() {
             for file in &manifest.files {
                 if suspected_paths.contains(&file.path) {
@@ -434,13 +444,13 @@ impl DiffProtocolHandler {
                 }
             }
         }
-        
+
         Ok(Some(DiffProtocolMessage::SendDiffDetails {
             file_details,
             request_id,
         }))
     }
-    
+
     /// Handle details response
     async fn handle_details_response(
         &self,
@@ -448,7 +458,7 @@ impl DiffProtocolHandler {
         _request_id: String,
     ) -> Result<Option<DiffProtocolMessage>, Box<dyn std::error::Error + Send + Sync>> {
         info!("Received {} file details", file_details.len());
-        
+
         // Update progress
         let mut progress_map = self.progress.write().await;
         for progress in progress_map.values_mut() {
@@ -458,11 +468,11 @@ impl DiffProtocolHandler {
                 progress.files_compared = file_details.len();
             }
         }
-        
+
         // In a real implementation, we would now request specific chunks
         Ok(None)
     }
-    
+
     /// Handle chunks request
     async fn handle_chunks_request(
         &self,
@@ -470,7 +480,7 @@ impl DiffProtocolHandler {
         request_id: String,
     ) -> Result<Option<DiffProtocolMessage>, Box<dyn std::error::Error + Send + Sync>> {
         info!("Chunks requested: {}", chunk_hashes.len());
-        
+
         // In a real implementation, fetch chunks from CAS
         Ok(Some(DiffProtocolMessage::Acknowledge {
             request_id,
@@ -478,7 +488,7 @@ impl DiffProtocolHandler {
             message: Some(format!("Would send {} chunks", chunk_hashes.len())),
         }))
     }
-    
+
     /// Handle acknowledge message
     async fn handle_acknowledge(
         &self,
@@ -493,7 +503,7 @@ impl DiffProtocolHandler {
                 warn!("Error acknowledged: {}", msg);
             }
         }
-        
+
         // Update progress to completed
         let mut progress_map = self.progress.write().await;
         for progress in progress_map.values_mut() {
@@ -502,22 +512,26 @@ impl DiffProtocolHandler {
                 progress.progress_percent = 100;
             }
         }
-        
+
         Ok(None)
     }
-    
+
     /// Get current progress for a peer
     pub async fn get_progress(&self, peer_id: &str) -> Option<DiffProgress> {
         let progress_map = self.progress.read().await;
         progress_map.get(peer_id).cloned()
     }
-    
+
     /// Get bandwidth savings statistics
     pub async fn get_bandwidth_stats(&self) -> (u64, f64) {
         let progress_map = self.progress.read().await;
         let total_saved: u64 = progress_map.values().map(|p| p.bytes_saved).sum();
         let count = progress_map.len() as f64;
-        let avg_saved = if count > 0.0 { total_saved as f64 / count } else { 0.0 };
+        let avg_saved = if count > 0.0 {
+            total_saved as f64 / count
+        } else {
+            0.0
+        };
         (total_saved, avg_saved)
     }
 }
@@ -525,20 +539,24 @@ impl DiffProtocolHandler {
 /// Compression support for protocol messages
 pub mod compression {
     use super::*;
-    
+
     /// Compress a protocol message
-    pub fn compress_message(msg: &DiffProtocolMessage) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn compress_message(
+        msg: &DiffProtocolMessage,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         let data = bincode::serialize(msg)?;
         let compressed = zstd::encode_all(&data[..], 3)?;
-        
+
         // Add header to identify compressed messages
         let mut result = vec![0xCA, 0xFE]; // Magic bytes
         result.extend_from_slice(&compressed);
         Ok(result)
     }
-    
+
     /// Decompress a protocol message
-    pub fn decompress_message(data: &[u8]) -> Result<DiffProtocolMessage, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn decompress_message(
+        data: &[u8],
+    ) -> Result<DiffProtocolMessage, Box<dyn std::error::Error + Send + Sync>> {
         // Check for compression header
         if data.len() > 2 && data[0] == 0xCA && data[1] == 0xFE {
             let decompressed = zstd::decode_all(&data[2..])?;
@@ -554,26 +572,26 @@ pub mod compression {
 mod tests {
     use super::*;
     use chrono::Utc;
-    
+
     #[test]
     fn test_bloom_filter_basic() {
         let mut filter = BloomFilter::new(1000, 0.01);
-        
+
         // Add some items
         filter.add(&"test1");
         filter.add(&"test2");
         filter.add(&"test3");
-        
+
         // Test membership
         assert!(filter.contains(&"test1"));
         assert!(filter.contains(&"test2"));
         assert!(filter.contains(&"test3"));
         assert!(!filter.contains(&"test4"));
-        
+
         // Check false positive rate
         assert!(filter.current_fpp() < 0.02);
     }
-    
+
     #[test]
     fn test_manifest_summary() {
         let manifest = Manifest {
@@ -600,19 +618,19 @@ mod tests {
             created_at: Utc::now(),
             manifest_hash: None,
         };
-        
+
         let summary = ManifestSummary::from_manifest(
             &manifest,
             "device1".to_string(),
             PathBuf::from("/test"),
         );
-        
+
         assert_eq!(summary.file_count, 2);
         assert_eq!(summary.total_size, 3072);
         assert!(summary.path_filter.contains(&"file1.txt"));
         assert!(summary.hash_filter.contains(&"hash1"));
     }
-    
+
     #[test]
     fn test_compression() {
         let msg = DiffProtocolMessage::Acknowledge {
@@ -620,14 +638,18 @@ mod tests {
             success: true,
             message: Some("Test message".to_string()),
         };
-        
+
         let compressed = compression::compress_message(&msg).unwrap();
         assert!(compressed.starts_with(&[0xCA, 0xFE]));
-        
+
         let decompressed = compression::decompress_message(&compressed).unwrap();
-        
+
         match decompressed {
-            DiffProtocolMessage::Acknowledge { request_id, success, message } => {
+            DiffProtocolMessage::Acknowledge {
+                request_id,
+                success,
+                message,
+            } => {
                 assert_eq!(request_id, "test");
                 assert!(success);
                 assert_eq!(message, Some("Test message".to_string()));
@@ -635,11 +657,11 @@ mod tests {
             _ => panic!("Wrong message type"),
         }
     }
-    
+
     #[tokio::test]
     async fn test_diff_protocol_flow() {
         let handler = DiffProtocolHandler::new("device1".to_string());
-        
+
         let manifest = Manifest {
             folder_id: "test".to_string(),
             version: 1,
@@ -647,21 +669,20 @@ mod tests {
             created_at: Utc::now(),
             manifest_hash: None,
         };
-        
+
         // Start diff
-        let msg = handler.start_diff(
-            "peer1".to_string(),
-            PathBuf::from("/test"),
-            manifest,
-        ).await.unwrap();
-        
+        let msg = handler
+            .start_diff("peer1".to_string(), PathBuf::from("/test"), manifest)
+            .await
+            .unwrap();
+
         match msg {
             DiffProtocolMessage::RequestSummary { path, .. } => {
                 assert_eq!(path, PathBuf::from("/test"));
             }
             _ => panic!("Expected RequestSummary"),
         }
-        
+
         // Check progress
         let progress = handler.get_progress("peer1").await;
         assert!(progress.is_some());

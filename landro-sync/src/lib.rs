@@ -23,7 +23,7 @@ pub mod sync_persistence;
 
 pub use conflict::{ConflictResolution, ConflictResolver, ConflictType};
 pub use conflict_detection::{
-    Conflict, ConflictDetector, ConflictDetectionConfig, ConflictType as DetectedConflictType,
+    Conflict, ConflictDetectionConfig, ConflictDetector, ConflictType as DetectedConflictType,
 };
 pub use diff::{ChangeType, DiffComputer, DiffResult, FileChange, IncrementalDiff};
 pub use errors::{Result, SyncError};

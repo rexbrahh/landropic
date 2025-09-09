@@ -1,4 +1,4 @@
-use landro_cas::{CompressionType, ContentStore, ContentStoreConfig, FsyncPolicy, CacheConfig};
+use landro_cas::{CacheConfig, CompressionType, ContentStore, ContentStoreConfig, FsyncPolicy};
 use tokio;
 
 /// Demonstrates atomic write capabilities and recovery features

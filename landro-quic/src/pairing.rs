@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::sync::RwLock;
 use std::sync::Arc;
-use subtle::ConstantTimeEq;
+use tokio::sync::RwLock;
 
 use crate::errors::{QuicError, Result};
 use landro_crypto::DeviceIdentity;
@@ -110,17 +109,17 @@ impl PairingManager {
     pub async fn start_pairing(&self, device_id: String, passphrase: String) -> Result<()> {
         let mut context = PairingContext::new();
         context.set_passphrase(passphrase).await;
-        
+
         let mut contexts = self.contexts.write().await;
         contexts.insert(device_id, context);
-        
+
         Ok(())
     }
 
     /// Verify pairing attempt
     pub async fn verify_pairing(&self, device_id: &str, passphrase: &str) -> Result<bool> {
         let mut contexts = self.contexts.write().await;
-        
+
         match contexts.get_mut(device_id) {
             Some(context) => context.verify_passphrase(passphrase).await,
             None => Err(QuicError::pairing_failed("No pairing context found")),

@@ -8,16 +8,15 @@ pub mod validation;
 
 pub use errors::{CasError, Result};
 pub use metrics::{
-    MetricsCollector, StorageMetrics, CacheMetrics, DedupMetrics, 
-    ResumableMetrics, PerformanceMetrics, StorageHealth, HealthStatus
+    CacheMetrics, DedupMetrics, HealthStatus, MetricsCollector, PerformanceMetrics,
+    ResumableMetrics, StorageHealth, StorageMetrics,
 };
 pub use packfile::{PackfileManager, PackfileStats};
 pub use storage::{
-    CompressionType, ContentStore, ContentStoreConfig, ContentStoreStats, CacheStats,
-    CacheConfig, FsyncPolicy, ObjectRef, PartialTransfer, RecoveryStats,
-    StorageStats, VerificationReport,
+    CacheConfig, CacheStats, CompressionType, ContentStore, ContentStoreConfig, ContentStoreStats,
+    FsyncPolicy, ObjectRef, PartialTransfer, RecoveryStats, StorageStats, VerificationReport,
 };
 pub use utilities::{
-    StorageUtilities, StorageReport, MaintenanceOptions, MaintenanceReport,
-    FilesystemReport, CorruptionReport, PerformanceReport,
+    CorruptionReport, FilesystemReport, MaintenanceOptions, MaintenanceReport, PerformanceReport,
+    StorageReport, StorageUtilities,
 };

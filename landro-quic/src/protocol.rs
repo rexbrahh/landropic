@@ -309,11 +309,15 @@ impl StreamProtocol {
             }
             MessageType::DiffRequest => {
                 // TODO: Implement DiffRequest deserialization when available
-                return Err(QuicError::Protocol("DiffRequest not yet implemented".to_string()));
+                return Err(QuicError::Protocol(
+                    "DiffRequest not yet implemented".to_string(),
+                ));
             }
             MessageType::DiffResponse => {
                 // TODO: Implement DiffResponse deserialization when available
-                return Err(QuicError::Protocol("DiffResponse not yet implemented".to_string()));
+                return Err(QuicError::Protocol(
+                    "DiffResponse not yet implemented".to_string(),
+                ));
             }
         };
 

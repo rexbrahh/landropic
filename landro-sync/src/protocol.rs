@@ -18,8 +18,7 @@ use landro_cas::ContentStore;
 use landro_chunker::ContentHash;
 use landro_index::manifest::{Manifest, ManifestEntry};
 use landro_proto::{
-    Ack, ChunkData, Error as ProtoError,
-    FolderSummary, Hello, Manifest as ProtoManifest, Want,
+    Ack, ChunkData, Error as ProtoError, FolderSummary, Hello, Manifest as ProtoManifest, Want,
 };
 
 use crate::diff::{DiffResult, IncrementalDiff};
@@ -138,7 +137,7 @@ impl SyncSession {
     pub async fn state(&self) -> SessionState {
         self.state.read().await.clone()
     }
-    
+
     /// Get peer ID
     pub fn peer_id(&self) -> &str {
         &self.peer_id

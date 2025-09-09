@@ -3,6 +3,7 @@
 //! This module implements the main orchestration logic using an actor pattern
 //! with message passing to coordinate file watching, chunking, storage, and sync.
 
+use quinn::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,7 +11,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{interval, timeout};
 use tracing::{debug, error, info, warn};
-use quinn::Connection;
 
 use crate::discovery::PeerInfo;
 use crate::watcher::{FileEvent, FileEventKind};
@@ -18,7 +18,7 @@ use crate::watcher::{FileEvent, FileEventKind};
 use landro_cas::ContentStore;
 use landro_chunker::Chunker;
 use landro_index::async_indexer::AsyncIndexer;
-use landro_quic::{QuicServer, QuicConfig};
+use landro_quic::{QuicConfig, QuicServer};
 // use landro_crypto::{DeviceIdentity, CertificateVerifier}; // Not needed for v1.0
 
 /// Messages that can be sent to the orchestrator
@@ -136,62 +136,69 @@ pub struct SyncOrchestrator {
 
 impl SyncOrchestrator {
     /// Initialize QUIC server and connection manager
-    pub async fn initialize_quic_transport(&mut self, bind_addr: std::net::SocketAddr) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn initialize_quic_transport(
+        &mut self,
+        bind_addr: std::net::SocketAddr,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Initializing QUIC transport on {}", bind_addr);
-        
+
         // Configure QUIC for file sync workloads
         let quic_config = QuicConfig::file_sync_optimized()
             .bind_addr(bind_addr)
             .idle_timeout(Duration::from_secs(300))
-            .stream_receive_window(128 * 1024 * 1024)  // 128MB for large chunks
-            .receive_window(2 * 1024 * 1024 * 1024);   // 2GB for bulk transfers
-        
+            .stream_receive_window(128 * 1024 * 1024) // 128MB for large chunks
+            .receive_window(2 * 1024 * 1024 * 1024); // 2GB for bulk transfers
+
         // Create and start QUIC server
         // For v1.0, create simple identity and verifier
-        use landro_crypto::{DeviceIdentity, CertificateVerifier};
+        use landro_crypto::{CertificateVerifier, DeviceIdentity};
         let identity = Arc::new(DeviceIdentity::generate(whoami::devicename())?);
         let verifier = Arc::new(CertificateVerifier::new(Vec::new()));
-        
-        let mut quic_server = QuicServer::new(
-            identity,
-            verifier,
-            quic_config.clone(),
-        );
+
+        let mut quic_server = QuicServer::new(identity, verifier, quic_config.clone());
         quic_server.start().await?;
         self.quic_server = Some(Arc::new(tokio::sync::RwLock::new(quic_server)));
-        
+
         // Create connection manager for outbound connections
         let discovery = crate::discovery::DiscoveryService::new(&whoami::devicename())?;
         // Simplified v1.0 - no connection manager needed
         // Connection management is handled by QuicServer directly
         info!("Using simplified connection handling for v1.0");
-        
+
         info!("QUIC transport initialized successfully");
         Ok(())
     }
 
     /// Handle incoming QUIC connection
-    pub async fn handle_incoming_connection(&self, connection: Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Handling incoming QUIC connection from {}", connection.remote_address());
-        
+    pub async fn handle_incoming_connection(
+        &self,
+        connection: Connection,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!(
+            "Handling incoming QUIC connection from {}",
+            connection.remote_address()
+        );
+
         // Perform protocol handshake
         // Simplified v1.0 - basic connection setup
         info!("Establishing connection with device: {}", self.device_name);
-        
+
         // Spawn handler for this connection
         let store = self.store.clone();
         let indexer = self.indexer.clone();
         let chunker = self.chunker.clone();
-        
+
         tokio::spawn(async move {
-            if let Err(e) = Self::handle_connection_streams(connection, store, indexer, chunker).await {
+            if let Err(e) =
+                Self::handle_connection_streams(connection, store, indexer, chunker).await
+            {
                 error!("Error handling connection streams: {}", e);
             }
         });
-        
+
         Ok(())
     }
-    
+
     /// Handle streams on an established connection
     async fn handle_connection_streams(
         connection: quinn::Connection,
@@ -219,7 +226,7 @@ impl SyncOrchestrator {
                         }
                     }
                 }
-                
+
                 // Accept unidirectional streams for control messages
                 result = connection.accept_uni() => {
                     match result {
@@ -239,10 +246,10 @@ impl SyncOrchestrator {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Handle data transfer stream
     async fn handle_data_stream(
         mut send: quinn::SendStream,
@@ -250,41 +257,47 @@ impl SyncOrchestrator {
         store: Arc<ContentStore>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        
+
         // Read chunk request
         let mut len_buf = [0u8; 4];
         recv.read_exact(&mut len_buf).await?;
         let chunk_hash_len = u32::from_be_bytes(len_buf) as usize;
-        
+
         let mut chunk_hash = vec![0u8; chunk_hash_len];
         recv.read_exact(&mut chunk_hash).await?;
-        
+
         // Retrieve chunk from store
-        let hash_array: [u8; 32] = chunk_hash.clone().try_into()
+        let hash_array: [u8; 32] = chunk_hash
+            .clone()
+            .try_into()
             .map_err(|_| "Invalid hash length")?;
         let hash = landro_chunker::ContentHash::from_bytes(hash_array);
         let chunk_data = store.read(&hash).await?;
-        
+
         // Send chunk data
         let len_bytes = (chunk_data.len() as u32).to_be_bytes();
         send.write_all(&len_bytes).await?;
         send.write_all(&chunk_data).await?;
         send.finish()?;
-        
-        debug!("Sent chunk {} ({} bytes)", hex::encode(&chunk_hash), chunk_data.len());
+
+        debug!(
+            "Sent chunk {} ({} bytes)",
+            hex::encode(&chunk_hash),
+            chunk_data.len()
+        );
         Ok(())
     }
-    
+
     /// Handle control stream
     async fn handle_control_stream(
         mut recv: quinn::RecvStream,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use tokio::io::AsyncReadExt;
-        
+
         // Read control message type
         let mut msg_type = [0u8; 1];
         recv.read_exact(&mut msg_type).await?;
-        
+
         match msg_type[0] {
             0 => {
                 // Manifest exchange
@@ -298,7 +311,7 @@ impl SyncOrchestrator {
                 warn!("Unknown control message type: {}", msg_type[0]);
             }
         }
-        
+
         Ok(())
     }
 
@@ -381,17 +394,19 @@ impl SyncOrchestrator {
                             let store_clone = store.clone();
                             let indexer_clone = indexer.clone();
                             let chunker_clone = chunker.clone();
-                            
+
                             tokio::spawn(async move {
                                 // Use the handle_quic_connection function from main.rs
                                 info!("Accepting connection from peer, handling with SimpleSyncMessage protocol");
                                 if let Err(e) = crate::connection_handler::handle_quic_connection(
-                                    connection, 
-                                    store_clone, 
+                                    connection,
+                                    store_clone,
                                     indexer_clone,
                                     // Create a dummy channel since we don't use QuicMessage in alpha
-                                    tokio::sync::mpsc::channel(1).0
-                                ).await {
+                                    tokio::sync::mpsc::channel(1).0,
+                                )
+                                .await
+                                {
                                     error!("Error handling QUIC connection: {}", e);
                                 }
                             });
@@ -473,7 +488,7 @@ impl SyncOrchestrator {
                 // Retry peer connection with exponential backoff
                 let mut retry_count = 0;
                 let max_retries = 3;
-                
+
                 while retry_count < max_retries {
                     match self.handle_message(message.clone()).await {
                         Ok(result) => return Ok(result),
@@ -485,7 +500,10 @@ impl SyncOrchestrator {
                                       retry_count, max_retries, e, backoff);
                                 tokio::time::sleep(backoff).await;
                             } else {
-                                error!("Failed to handle peer discovery after {} attempts: {}", max_retries, e);
+                                error!(
+                                    "Failed to handle peer discovery after {} attempts: {}",
+                                    max_retries, e
+                                );
                                 return Err(e);
                             }
                         }
@@ -696,7 +714,8 @@ impl SyncOrchestrator {
             // Simplified v1.0 - no connection manager
             // Direct connection handling will be implemented when needed
             info!("Peer sync requested - simplified handling for v1.0");
-            if false { // Placeholder condition
+            if false {
+                // Placeholder condition
                 info!("Established connection to peer {}", peer.device_name);
             }
         } else if let Some(ref callback) = self.on_peer_sync_needed {
@@ -760,14 +779,17 @@ impl SyncOrchestrator {
         peer_id: &str,
         _connection: quinn::Connection,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Sync request for peer {} - simplified v1.0 implementation", peer_id);
-        
+        info!(
+            "Sync request for peer {} - simplified v1.0 implementation",
+            peer_id
+        );
+
         // v1.0: Just log the sync request for now
         // Actual QUIC sync implementation will be added later
         for folder in &self.synced_folders {
             info!("Would sync folder: {}", folder.display());
         }
-        
+
         Ok(())
     }
 
@@ -781,7 +803,8 @@ impl SyncOrchestrator {
         // Use QUIC connections if available
         // Simplified v1.0 - no connection manager
         info!("Manual sync requested - simplified handling for v1.0");
-        if false { // Placeholder condition
+        if false {
+            // Placeholder condition
             for (peer_id, _peer_info) in &self.active_peers {
                 info!("Would sync with peer: {}", peer_id);
             }
@@ -952,7 +975,7 @@ impl SyncOrchestrator {
         let file = tokio::fs::File::open(path).await?;
         let metadata = file.metadata().await?;
         let file_size = metadata.len();
-        
+
         let mut file = file;
         // Use a rolling buffer approach - read in chunks that overlap
         // to ensure we don't miss chunk boundaries
@@ -965,7 +988,7 @@ impl SyncOrchestrator {
             // Read next chunk from file
             let mut temp_buffer = vec![0u8; read_size];
             let bytes_read = file.read(&mut temp_buffer).await?;
-            
+
             if bytes_read == 0 {
                 // Process any remaining data
                 if !buffer.is_empty() {
@@ -980,24 +1003,24 @@ impl SyncOrchestrator {
 
             // Add new data to buffer
             buffer.extend_from_slice(&temp_buffer[..bytes_read]);
-            
+
             // Process buffer when it's large enough
             // Keep some data for overlap to catch boundaries
             if buffer.len() >= self.config.max_concurrent_chunks * 256 * 1024 {
                 // Process most of the buffer, keeping last part for overlap
                 let process_size = buffer.len() - (256 * 1024); // Keep 256KB for overlap
                 let data_to_process = &buffer[..process_size];
-                
+
                 let chunks = self.chunker.chunk_bytes(data_to_process)?;
                 for chunk in chunks {
                     self.store.write(&chunk.data).await?;
                     total_chunks += 1;
                 }
-                
+
                 // Keep the unprocessed tail
                 buffer.drain(..process_size);
             }
-            
+
             file_offset += bytes_read as u64;
         }
 
