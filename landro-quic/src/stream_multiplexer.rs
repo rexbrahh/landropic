@@ -55,8 +55,8 @@ pub enum DataMessage {
 /// Stream multiplexer for managing control and data channels
 pub struct StreamMultiplexer {
     connection: Arc<Connection>,
-    control_streams: Arc<RwLock<HashMap<String, (SendStream, RecvStream)>>>,
-    data_streams: Arc<RwLock<HashMap<String, (SendStream, RecvStream)>>>,
+    control_streams: Arc<RwLock<HashMap<String, Arc<Mutex<SendStream>>>>>,
+    data_streams: Arc<RwLock<HashMap<String, Arc<Mutex<SendStream>>>>>,
     message_handlers: Arc<RwLock<HashMap<StreamType, mpsc::Sender<MultiplexMessage>>>>,
     health_monitor: Arc<HealthMonitor>,
     config: MultiplexConfig,
@@ -157,7 +157,6 @@ impl StreamMultiplexer {
 
         let mut control_streams = self.control_streams.write().await;
         control_streams.insert(stream_id.to_string(), (send_stream, recv_stream));
-
         // Initialize health stats
         self.health_monitor.init_stream_stats(stream_id).await;
 
@@ -168,6 +167,7 @@ impl StreamMultiplexer {
     /// Create a new data stream
     pub async fn create_data_stream(&self, stream_id: &str) -> Result<()> {
         debug!("Creating data stream: {}", stream_id);
+
 
         let (send_stream, recv_stream) = self
             .connection
@@ -192,9 +192,18 @@ impl StreamMultiplexer {
 
     /// Send a control message
     pub async fn send_control_message(&self, message: ControlMessage) -> Result<()> {
-        // For now, return success without actually sending
-        // TODO: Implement proper stream multiplexing with Arc<Mutex<SendStream>>
-        debug!("Control message queued: {:?}", message);
+        // Ensure primary control stream exists
+        self.ensure_control_stream().await?;
+        
+        let control_streams = self.control_streams.read().await;
+        let send_stream = control_streams.get("primary")
+            .ok_or_else(|| QuicError::Stream("Primary control stream not found".to_string()))?;
+        
+        let multiplex_message = MultiplexMessage::Control(message);
+        let mut stream_guard = send_stream.lock().await;
+        self.send_message(&mut stream_guard, &multiplex_message, "primary").await?;
+        
+        debug!("Control message sent successfully");
         Ok(())
     }
 
@@ -206,6 +215,7 @@ impl StreamMultiplexer {
         }
 
         let data_streams = self.data_streams.read().await;
+
         let (send_stream, _) = data_streams
             .get(stream_id)
             .ok_or_else(|| QuicError::Stream(format!("Data stream '{}' not found", stream_id)))?;
@@ -216,7 +226,6 @@ impl StreamMultiplexer {
             "Data message queued for stream '{}': {:?}",
             stream_id, message
         );
-
         Ok(())
     }
 
@@ -284,6 +293,24 @@ impl StreamMultiplexer {
             .map_err(|e| QuicError::Stream(format!("Failed to send stream type header: {}", e)))?;
 
         debug!("Sent stream type header: {:?}", stream_type);
+        Ok(())
+    }
+
+    /// Send heartbeat message (static helper to avoid self capture in tokio::spawn)
+    async fn send_heartbeat_message(send_stream: &mut SendStream, message: &MultiplexMessage, stream_id: &str) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        
+        // Serialize message (simplified heartbeat)
+        let message_data = b"heartbeat".to_vec();
+        
+        // Send message length followed by data
+        let length_bytes = (message_data.len() as u32).to_be_bytes();
+        
+        send_stream.write_all(&length_bytes).await
+            .map_err(|e| QuicError::Stream(format!("Failed to send heartbeat length: {}", e)))?;
+        send_stream.write_all(&message_data).await
+            .map_err(|e| QuicError::Stream(format!("Failed to send heartbeat data: {}", e)))?;
+        
         Ok(())
     }
 

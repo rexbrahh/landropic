@@ -1572,6 +1572,7 @@ dependencies = [
  "bincode",
  "blake3",
  "chacha20poly1305",
+ "chrono",
  "dirs",
  "ed25519-dalek",
  "hex",
@@ -1581,6 +1582,7 @@ dependencies = [
  "rustls",
  "rustls-pemfile",
  "serde",
+ "subtle",
  "tempfile",
  "thiserror 1.0.69",
  "time",
@@ -1743,21 +1745,27 @@ dependencies = [
 name = "landropic"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "blake3",
  "chrono",
  "hex",
  "landro-cas",
  "landro-chunker",
+ "landro-cli",
  "landro-crypto",
+ "landro-daemon",
  "landro-index",
  "landro-proto",
  "landro-quic",
+ "landro-sync",
+ "libc",
  "prost-types",
  "rustls",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

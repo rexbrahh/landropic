@@ -39,11 +39,32 @@ impl PairingContext {
         self.expected_passphrase = Some(passphrase);
     }
 
-    /// Verify passphrase from peer
+    /// Verify passphrase from peer using constant-time comparison to prevent timing attacks
+    /// 
+    /// SECURITY: This method uses constant-time comparison to prevent timing side-channel attacks
+    /// that could allow an attacker to guess the passphrase character by character by measuring
+    /// response times. The subtle crate ensures that comparison time is independent of where
+    /// the first differing byte occurs.
     pub async fn verify_passphrase(&mut self, received_passphrase: &str) -> Result<bool> {
         match &self.expected_passphrase {
             Some(expected) => {
-                if expected == received_passphrase {
+                // Use constant-time comparison to prevent timing attacks
+                // Convert strings to byte arrays for constant-time comparison
+                let expected_bytes = expected.as_bytes();
+                let received_bytes = received_passphrase.as_bytes();
+                
+                // Ensure both passphrases are the same length to prevent length-based timing attacks
+                let matches = if expected_bytes.len() == received_bytes.len() {
+                    expected_bytes.ct_eq(received_bytes).into()
+                } else {
+                    // If lengths differ, still perform a dummy comparison to maintain constant time
+                    // Compare against a dummy array of the same length as the received passphrase
+                    let dummy = vec![0u8; received_bytes.len()];
+                    let _ = received_bytes.ct_eq(&dummy); // Dummy comparison for timing consistency
+                    false // Always false for different lengths
+                };
+                
+                if matches {
                     let mut state = self.state.write().await;
                     *state = PairingState::Completed;
                     Ok(true)
