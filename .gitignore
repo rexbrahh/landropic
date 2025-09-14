@@ -207,3 +207,6 @@ SPRINT_PLAN.md
 COORDINATION_INSTRUCTIONS.md
 scripts/test-daemon.sh
 
+agent_scripts/
+
+ISSUE_TEMPLATE/
