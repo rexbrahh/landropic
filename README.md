@@ -5,6 +5,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)](https://www.rust-lang.org) 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/landropic/landropic#license)
 [![Nix](https://img.shields.io/badge/Built%20with-Nix-blue.svg)](https://nixos.org)
+[![CI](https://github.com/rexbrahh/landropic/actions/workflows/ci.yml/badge.svg)](https://github.com/rexbrahh/landropic/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rexbrahh/landropic?include_prereleases)](https://github.com/rexbrahh/landropic/releases)
 
 Landropic is a secure, fast, and reliable file synchronization tool designed for local networks. It provides end-to-end encryption, automatic device discovery, and efficient chunked file transfer using modern protocols.
